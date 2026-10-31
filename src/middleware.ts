@@ -38,10 +38,6 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  if (pathname === '/admin/login' && admin?.role === 'admin') {
-    return NextResponse.redirect(new URL('/admin', request.url));
-  }
-
   // Student routes require a valid student session cookie.
   if (isStudentArea && student?.role !== 'student') {
     return NextResponse.redirect(

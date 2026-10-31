@@ -209,5 +209,3 @@ on dashboard loads, session loads, and admin results/live-monitor loads.
 - The §6 sample line parses correctly; malformed lines produce readable errors
   instead of crashes.
 - `npm run build` passes with no type errors.
-#   C B T - a p p  
- 
