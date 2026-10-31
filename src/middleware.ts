@@ -28,6 +28,10 @@ export async function middleware(request: NextRequest) {
 
   // Admin routes require a valid admin session cookie.
   if (isAdminArea || isAdminApi) {
+    // Allow access to the login page without authentication.
+    if (pathname === '/admin/login') {
+      return NextResponse.next();
+    }
     if (admin?.role !== 'admin') {
       return NextResponse.redirect(new URL('/admin/login', request.url));
     }
