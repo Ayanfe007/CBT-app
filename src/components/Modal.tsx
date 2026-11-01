@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect } from 'react';
 
 interface ModalProps {
   open: boolean;
@@ -41,12 +41,14 @@ export default function Modal({ open, onClose, children, className }: ModalProps
       {/* Overlay: sibling, blur only here */}
       <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={onClose} />
 
-      {/* Modal content: sibling, above overlay */}
+      {/* Modal content: sibling, above overlay, scrollable */}
       <div
-        className={`relative z-50 w-full max-w-md mx-4 bg-white rounded-lg border border-slate-200 shadow-xl ${className}`}
+        className={`relative z-50 w-full max-w-md mx-4 bg-white rounded-lg border border-slate-200 shadow-xl max-h-[90vh] overflow-y-auto flex flex-col ${className}`}
         onClick={(e) => e.stopPropagation()}
       >
-        {children}
+        <div className="overflow-y-auto flex-1 pb-4">
+          {children}
+        </div>
       </div>
     </div>
   );
