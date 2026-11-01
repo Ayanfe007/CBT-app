@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
+import Modal from '@/components/Modal';
 
 interface Student {
   id: string;
@@ -46,7 +47,7 @@ export default function StudentsPage() {
     const json = await res.json();
     setCredentials([{ full_name: json.student.full_name, login_id: json.student.login_id, pin: json.pin }]);
     setShowSingle(false);
-    setShowBulk(true); // show credentials table
+    setShowBulk(true);
     load();
   }
 
@@ -138,7 +139,6 @@ export default function StudentsPage() {
         <div className="p-3 rounded text-sm text-red-700 bg-red-50 border border-red-100">{error}</div>
       )}
 
-      {/* Credentials one-time display */}
       {credentials.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
           <h3 className="text-sm font-bold text-amber-800 mb-2">One-time credentials</h3>
@@ -164,16 +164,10 @@ export default function StudentsPage() {
             </table>
           </div>
           <div className="flex gap-2 mt-3">
-            <button
-              onClick={downloadCredentials}
-              className="px-3 py-1.5 rounded border border-amber-300 text-amber-800 text-xs hover:bg-amber-100"
-            >
+            <button onClick={downloadCredentials} className="px-3 py-1.5 rounded border border-amber-300 text-amber-800 text-xs hover:bg-amber-100">
               Download CSV
             </button>
-            <button
-              onClick={() => window.print()}
-              className="px-3 py-1.5 rounded border border-amber-300 text-amber-800 text-xs hover:bg-amber-100"
-            >
+            <button onClick={() => window.print()} className="px-3 py-1.5 rounded border border-amber-300 text-amber-800 text-xs hover:bg-amber-100">
               Print
             </button>
           </div>
@@ -197,32 +191,19 @@ export default function StudentsPage() {
                 <td className="p-3 border border-slate-200">{s.full_name}</td>
                 <td className="p-3 border border-slate-200 font-mono text-sm">{s.login_id}</td>
                 <td className="p-3 border border-slate-200">
-                  <span
-                    className={`px-2 py-0.5 rounded text-xs font-medium ${
-                      s.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                    }`}
-                  >
+                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${s.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                     {s.is_active ? 'Active' : 'Inactive'}
                   </span>
                 </td>
                 <td className="p-3 border border-slate-200 text-sm">{new Date(s.created_at).toLocaleDateString()}</td>
                 <td className="p-3 border border-slate-200">
-                  <button
-                    onClick={() => toggleActive(s.id, s.is_active)}
-                    className="text-xs px-2 py-1 border border-slate-300 rounded text-slate-700 hover:bg-slate-100 mr-2"
-                  >
+                  <button onClick={() => toggleActive(s.id, s.is_active)} className="text-xs px-2 py-1 border border-slate-300 rounded text-slate-700 hover:bg-slate-100 mr-2">
                     {s.is_active ? 'Deactivate' : 'Reactivate'}
                   </button>
-                  <button
-                    onClick={() => resetPin(s.id, s.full_name)}
-                    className="text-xs px-2 py-1 border border-blue-200 rounded text-blue-600 hover:bg-blue-50 mr-2"
-                  >
+                  <button onClick={() => resetPin(s.id, s.full_name)} className="text-xs px-2 py-1 border border-blue-200 rounded text-blue-600 hover:bg-blue-50 mr-2">
                     Reset PIN
                   </button>
-                  <button
-                    onClick={() => delStudent(s.id)}
-                    className="text-xs px-2 py-1 border border-red-200 rounded text-red-600 hover:bg-red-50"
-                  >
+                  <button onClick={() => delStudent(s.id)} className="text-xs px-2 py-1 border border-red-200 rounded text-red-600 hover:bg-red-50">
                     Delete
                   </button>
                 </td>
@@ -234,94 +215,41 @@ export default function StudentsPage() {
 
       {loading && <p>Loading students…</p>}
 
-      {/* Single create form */}
-      <div
-        className={`fixed inset-0 z-50 flex items-center justify-center ${
-          showSingle ? '' : 'hidden'
-        }`}
-      >
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => setShowSingle(false)} />
-        <div className="bg-white rounded-lg p-6 max-w-md w-full shadow-xl">
-          <h2 className="text-lg font-bold text-slate-900 mb-4">Create Student</h2>
-          <form onSubmit={createStudent} className="space-y-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Full name</label>
-              <input
-                required
-                name="full_name"
-                className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Login ID (optional, auto-generated)</label>
-              <input
-                name="login_id"
-                className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
-                placeholder="e.g. CSC/2023/001"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">PIN (optional, 6 digits auto-generated)</label>
-              <input
-                name="pin"
-                type="text"
-                maxLength={6}
-                className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
-              />
-            </div>
-            <div className="flex justify-end gap-2 pt-4">
-              <button
-                type="button"
-                onClick={() => setShowSingle(false)}
-                className="px-4 py-2 rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button type="submit" className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700">
-                Create
-              </button>
-            </div>
-          </form>
-        </div>
-      </div>
+      <Modal open={showSingle} onClose={() => setShowSingle(false)} className="max-w-md">
+        <h2 className="text-lg font-bold text-slate-900 mb-4">Create Student</h2>
+        <form onSubmit={createStudent} className="space-y-3">
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Full name</label>
+            <input required name="full_name" className="w-full border border-slate-300 rounded px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Login ID (optional, auto-generated)</label>
+            <input name="login_id" className="w-full border border-slate-300 rounded px-3 py-2 text-sm" placeholder="e.g. CSC/2023/001" />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">PIN (optional, 6 digits auto-generated)</label>
+            <input name="pin" type="text" maxLength={6} className="w-full border border-slate-300 rounded px-3 py-2 text-sm" />
+          </div>
+          <div className="flex justify-end gap-2 pt-4">
+            <button type="button" onClick={() => setShowSingle(false)} className="px-4 py-2 rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50">Cancel</button>
+            <button type="submit" className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700">Create</button>
+          </div>
+        </form>
+      </Modal>
 
-      {/* Bulk create form */}
-      <div
-        className={`fixed inset-0 z-50 flex items-center justify-center ${
-          showBulk && credentials.length === 0 ? '' : 'hidden'
-        }`}
-      >
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => setShowBulk(false)} />
-        <div className="bg-white rounded-lg p-6 max-w-md w-full shadow-xl">
-          <h2 className="text-lg font-bold text-slate-900 mb-4">Bulk Create Students</h2>
-          <p className="text-sm text-slate-600 mb-4">
-            Paste names, one per line. Optional: "Name, RegNumber" to use a custom login ID.
-          </p>
-          <form onSubmit={bulkCreate} className="space-y-3">
-            <div>
-              <textarea
-                required
-                name="names"
-                rows={8}
-                className="w-full border border-slate-300 rounded px-3 py-2 text-sm font-mono"
-                placeholder="Adebola Adebayo\nChinedu Okafor, CSC/2023/002\nFatima Yusuf"
-              />
-            </div>
-            <div className="flex justify-end gap-2 pt-4">
-              <button
-                type="button"
-                onClick={() => setShowBulk(false)}
-                className="px-4 py-2 rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button type="submit" className="px-4 py-2 rounded-md bg-green-600 text-white hover:bg-green-700">
-                Create All
-              </button>
-            </div>
-          </form>
-        </div>
-      </div>
+      <Modal open={showBulk && credentials.length === 0} onClose={() => setShowBulk(false)} className="max-w-md">
+        <h2 className="text-lg font-bold text-slate-900 mb-4">Bulk Create Students</h2>
+        <p className="text-sm text-slate-600 mb-4">Paste names, one per line. Optional: "Name, RegNumber" to use a custom login ID.</p>
+        <form onSubmit={bulkCreate} className="space-y-3">
+          <div>
+            <textarea required name="names" rows={8} className="w-full border border-slate-300 rounded px-3 py-2 text-sm font-mono" placeholder="Adebola Adebayo\nChinedu Okafor, CSC/2023/002\nFatima Yusuf" />
+          </div>
+          <div className="flex justify-end gap-2 pt-4">
+            <button type="button" onClick={() => setShowBulk(false)} className="px-4 py-2 rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50">Cancel</button>
+            <button type="submit" className="px-4 py-2 rounded-md bg-green-600 text-white hover:bg-green-700">Create All</button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

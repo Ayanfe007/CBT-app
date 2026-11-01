@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
+import Modal from '@/components/Modal';
 
 interface Course {
   id: string;
@@ -135,18 +136,12 @@ export default function CoursesPage() {
                 <td className="p-3 border border-slate-200 font-mono text-sm">{c.course_code}</td>
                 <td className="p-3 border border-slate-200">{c.title}</td>
                 <td className="p-3 border border-slate-200">{c.duration_minutes} min</td>
-                <td className="p-3 border border-slate-200">
-                  {c.questions_per_test == null ? 'All' : c.questions_per_test}
-                </td>
+                <td className="p-3 border border-slate-200">{c.questions_per_test == null ? 'All' : c.questions_per_test}</td>
                 <td className="p-3 border border-slate-200">{c.pass_mark_percent}%</td>
                 <td className="p-3 border border-slate-200">{c.max_attempts}</td>
                 <td className="p-3 border border-slate-200">{c.max_pause_minutes}</td>
                 <td className="p-3 border border-slate-200">
-                  <span
-                    className={`px-2 py-0.5 rounded text-xs font-medium ${
-                      c.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                    }`}
-                  >
+                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${c.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                     {c.is_active ? 'Open' : 'Closed'}
                   </span>
                 </td>
@@ -185,131 +180,118 @@ export default function CoursesPage() {
 
       {loading && <p>Loading courses…</p>}
 
-      {/* Form dialog */}
-      <div
-        className={`fixed inset-0 z-50 flex items-center justify-center ${
-          openForm ? '' : 'hidden'
-        }`}
-      >
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => setOpenForm(false)} />
-        <div className="bg-white rounded-lg p-6 max-w-md w-full shadow-xl">
-          <h2 className="text-lg font-bold text-slate-900 mb-4">
-            {editing ? 'Edit Course' : 'Add Course'}
-          </h2>
-          <form onSubmit={saveCourse} className="space-y-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Course code</label>
-              <input
-                required
-                className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
-                value={form.course_code}
-                onChange={(e) => setForm({ ...form, course_code: e.target.value })}
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Title</label>
-              <input
-                required
-                className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
-                value={form.title}
-                onChange={(e) => setForm({ ...form, title: e.target.value })}
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Duration (minutes)</label>
-              <input
-                required
-                type="number"
-                className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
-                value={form.duration_minutes}
-                onChange={(e) => setForm({ ...form, duration_minutes: e.target.value })}
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Questions per test (blank = all)</label>
-              <input
-                type="number"
-                className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
-                value={form.questions_per_test}
-                onChange={(e) => setForm({ ...form, questions_per_test: e.target.value })}
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Pass mark (%)</label>
-              <input
-                type="number"
-                className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
-                value={form.pass_mark_percent}
-                onChange={(e) => setForm({ ...form, pass_mark_percent: e.target.value })}
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Max attempts</label>
-              <input
-                type="number"
-                className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
-                value={form.max_attempts}
-                onChange={(e) => setForm({ ...form, max_attempts: e.target.value })}
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Max pause allowance (minutes)</label>
-              <input
-                type="number"
-                className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
-                value={form.max_pause_minutes}
-                onChange={(e) => setForm({ ...form, max_pause_minutes: e.target.value })}
-              />
-              <p className="text-xs text-slate-500 mt-1">0 disables pausing. Timer pauses when connection is lost.</p>
-            </div>
-            <div className="flex items-start gap-3 mt-2">
-              <input
-                id="is_active"
-                type="checkbox"
-                className="mt-0.5"
-                checked={form.is_active}
-                onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
-              />
-              <label htmlFor="is_active" className="text-sm text-slate-700">Course is open (students can start)</label>
-            </div>
-            <div className="flex items-start gap-3">
-              <input
-                id="show_result"
-                type="checkbox"
-                className="mt-0.5"
-                checked={form.show_result_to_student}
-                onChange={(e) => setForm({ ...form, show_result_to_student: e.target.checked })}
-              />
-              <label htmlFor="show_result" className="text-sm text-slate-700">Show score to student</label>
-            </div>
-            <div className="flex items-start gap-3">
-              <input
-                id="show_review"
-                type="checkbox"
-                className="mt-0.5"
-                checked={form.show_review_to_student}
-                onChange={(e) => setForm({ ...form, show_review_to_student: e.target.checked })}
-              />
-              <label htmlFor="show_review" className="text-sm text-slate-700">Show review to student</label>
-            </div>
-            <div className="flex justify-end gap-2 pt-4">
-              <button
-                type="button"
-                onClick={() => setOpenForm(false)}
-                className="px-4 py-2 rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
-              >
-                {editing ? 'Update' : 'Create'}
-              </button>
-            </div>
-          </form>
-        </div>
-      </div>
+      <Modal open={openForm} onClose={() => setOpenForm(false)} className="max-w-md">
+        <h2 className="text-lg font-bold text-slate-900 mb-4">{editing ? 'Edit Course' : 'Add Course'}</h2>
+        <form onSubmit={saveCourse} className="space-y-3">
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Course code</label>
+            <input
+              required
+              className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+              value={form.course_code}
+              onChange={(e) => setForm({ ...form, course_code: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Title</label>
+            <input
+              required
+              className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+              value={form.title}
+              onChange={(e) => setForm({ ...form, title: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Duration (minutes)</label>
+            <input
+              required
+              type="number"
+              className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+              value={form.duration_minutes}
+              onChange={(e) => setForm({ ...form, duration_minutes: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Questions per test (blank = all)</label>
+            <input
+              type="number"
+              className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+              value={form.questions_per_test}
+              onChange={(e) => setForm({ ...form, questions_per_test: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Pass mark (%)</label>
+            <input
+              type="number"
+              className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+              value={form.pass_mark_percent}
+              onChange={(e) => setForm({ ...form, pass_mark_percent: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Max attempts</label>
+            <input
+              type="number"
+              className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+              value={form.max_attempts}
+              onChange={(e) => setForm({ ...form, max_attempts: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Max pause allowance (minutes)</label>
+            <input
+              type="number"
+              className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+              value={form.max_pause_minutes}
+              onChange={(e) => setForm({ ...form, max_pause_minutes: e.target.value })}
+            />
+            <p className="text-xs text-slate-500 mt-1">0 disables pausing. Timer pauses when connection is lost.</p>
+          </div>
+          <div className="flex items-start gap-3 mt-2">
+            <input
+              id="is_active"
+              type="checkbox"
+              className="mt-0.5"
+              checked={form.is_active}
+              onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
+            />
+            <label htmlFor="is_active" className="text-sm text-slate-700">Course is open (students can start)</label>
+          </div>
+          <div className="flex items-start gap-3">
+            <input
+              id="show_result"
+              type="checkbox"
+              className="mt-0.5"
+              checked={form.show_result_to_student}
+              onChange={(e) => setForm({ ...form, show_result_to_student: e.target.checked })}
+            />
+            <label htmlFor="show_result" className="text-sm text-slate-700">Show score to student</label>
+          </div>
+          <div className="flex items-start gap-3">
+            <input
+              id="show_review"
+              type="checkbox"
+              className="mt-0.5"
+              checked={form.show_review_to_student}
+              onChange={(e) => setForm({ ...form, show_review_to_student: e.target.checked })}
+            />
+            <label htmlFor="show_review" className="text-sm text-slate-700">Show review to student</label>
+          </div>
+          <div className="flex justify-end gap-2 pt-4">
+            <button
+              type="button"
+              onClick={() => setOpenForm(false)}
+              className="px-4 py-2 rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+            <button type="submit" className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700">
+              {editing ? 'Update' : 'Create'}
+            </button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }
