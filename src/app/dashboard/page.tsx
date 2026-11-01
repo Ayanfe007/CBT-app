@@ -2,7 +2,6 @@ import { supabaseAdmin } from '@/lib/supabase/admin';
 import { verifyStudentSession } from '@/lib/auth/verify';
 import { finalizeExpiredSessions } from '@/lib/db/grading';
 import { redirect } from 'next/navigation';
-import { getSession } from '@/lib/db/sessions';
 
 interface CourseWithStatus {
   id: string;
@@ -10,11 +9,11 @@ interface CourseWithStatus {
   title: string;
   duration_minutes: number;
   questions_per_test: number | null;
-  pass_mark_percent: number;
   is_active: boolean;
   show_result_to_student: boolean;
   show_review_to_student: boolean;
   max_attempts: number;
+  pass_mark_percent: number;
   attempts_used: number;
   status: 'not_started' | 'in_progress' | 'completed';
   sessionId: string | null;
@@ -28,16 +27,12 @@ export default async function DashboardPage() {
   const student = await verifyStudentSession();
   if (!student) redirect('/login');
 
-  // Auto-grade any expired sessions before rendering.
   try {
     await finalizeExpiredSessions();
-  } catch {
-    // Non-fatal: dashboard still renders; results may be updated on next load.
-  }
+  } catch {}
 
   const studentId = student.studentId;
 
-  // Fetch assignments joined to courses.
   const { data: assignments } = await supabaseAdmin
     .from('course_assignments')
     .select(
@@ -59,10 +54,9 @@ export default async function DashboardPage() {
     const course = (a as any).courses;
     if (!course) continue;
 
-    // Sessions for this student+course.
     const { data: sessions } = await supabaseAdmin
       .from('test_sessions')
-      .select('id, submitted_at, submit_type, score')
+      .select('id, submitted_at, submit_type')
       .eq('student_id', studentId)
       .eq('course_id', course.id);
 
@@ -87,7 +81,6 @@ export default async function DashboardPage() {
       const latest = submitted[submitted.length - 1];
       sessionId = latest.id;
       submit_type = latest.submit_type;
-      // Fetch the result for details.
       const { data: result } = await supabaseAdmin
         .from('test_results')
         .select('score, percentage, passed')
@@ -133,12 +126,14 @@ export default async function DashboardPage() {
             You can only see and take courses assigned to you by your admin.
           </p>
         </div>
-        <a
-          href="/api/auth/student/logout"
-          className="px-4 py-2 rounded-md border border-slate-300 text-sm text-slate-700 hover:bg-slate-50"
-        >
-          Sign out
-        </a>
+        <div className="flex items-center gap-3">
+          <a
+            href="/api/auth/student/logout"
+            className="px-4 py-2 rounded-md border border-slate-300 text-slate-700 text-sm hover:bg-slate-50"
+          >
+            Sign out
+          </a>
+        </div>
       </div>
 
       {coursesWithStatus.length === 0 && (
@@ -178,7 +173,7 @@ export default async function DashboardPage() {
                 Attempts: {c.attempts_used} / {c.max_attempts}
               </span>
               <span className="ml-4">
-                Pass mark: {c.pass_mark_percent ?? 50}%
+                Pass mark: {c.pass_mark_percent}%
               </span>
             </div>
 
