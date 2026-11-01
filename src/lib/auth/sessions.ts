@@ -1,21 +1,13 @@
 import { SignJWT } from 'jose';
 import { cookies } from 'next/headers';
+import { STUDENT_SESSION_COOKIE, ADMIN_SESSION_COOKIE, cookieOptions } from './cookie';
 
-const SECRET = new TextEncoder().encode(process.env.SESSION_SECRET!);
-const ADMIN_COOKIE = 'admin_session';
-const STUDENT_COOKIE = 'student_session';
-
-function cookieOptions(maxAge: number) {
-  return {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax' as const,
-    path: '/' as const,
-    maxAge,
-  };
+if (!process.env.SESSION_SECRET) {
+  throw new Error('SESSION_SECRET is required');
 }
 
-/** Admin session: issued after verifying ADMIN_PASSWORD. */
+const SECRET = new TextEncoder().encode(process.env.SESSION_SECRET);
+
 export async function createAdminSession() {
   const token = await new SignJWT({ role: 'admin' })
     .setProtectedHeader({ alg: 'HS256' })
@@ -24,10 +16,9 @@ export async function createAdminSession() {
     .sign(SECRET);
 
   const cookieStore = await cookies();
-  cookieStore.set(ADMIN_COOKIE, token, cookieOptions(60 * 60 * 24 * 7));
+  cookieStore.set(ADMIN_SESSION_COOKIE, token, cookieOptions(60 * 60 * 24 * 7));
 }
 
-/** Student session: issued after verifying login_id + bcrypt PIN. */
 export async function createStudentSession(studentId: string) {
   const token = await new SignJWT({ role: 'student', sub: studentId })
     .setProtectedHeader({ alg: 'HS256' })
@@ -36,12 +27,11 @@ export async function createStudentSession(studentId: string) {
     .sign(SECRET);
 
   const cookieStore = await cookies();
-  cookieStore.set(STUDENT_COOKIE, token, cookieOptions(60 * 60 * 12));
+  cookieStore.set(STUDENT_SESSION_COOKIE, token, cookieOptions(60 * 60 * 12));
 }
 
-/** Clear both session cookies (logout). */
 export async function clearSession() {
   const cookieStore = await cookies();
-  cookieStore.set(ADMIN_COOKIE, '', { ...cookieOptions(0), maxAge: 0 });
-  cookieStore.set(STUDENT_COOKIE, '', { ...cookieOptions(0), maxAge: 0 });
+  cookieStore.set(ADMIN_SESSION_COOKIE, '', { ...cookieOptions(0), maxAge: 0 });
+  cookieStore.set(STUDENT_SESSION_COOKIE, '', { ...cookieOptions(0), maxAge: 0 });
 }

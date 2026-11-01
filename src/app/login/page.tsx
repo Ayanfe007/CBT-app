@@ -1,19 +1,39 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 export default function LoginPage() {
-  const router = useRouter();
-  const [loginId, setLoginId] = useState('');
-  const [pin, setPin] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [checking, setChecking] = useState(true);
+
+  useEffect(() => {
+    // Verify existing session on mount; if valid, go to dashboard.
+    async function checkSession() {
+      try {
+        const res = await fetch('/api/auth/session/verify', {
+          headers: { 'Cache-Control': 'no-store' },
+        });
+        if (res.ok) {
+          window.location.href = '/dashboard';
+          return;
+        }
+      } catch {
+        // ignore, fall through to login form
+      }
+      setChecking(false);
+    }
+    checkSession();
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
     setLoading(true);
+
+    const formData = new FormData(e.currentTarget as HTMLFormElement);
+    const loginId = formData.get('loginId') as string;
+    const pin = formData.get('pin') as string;
 
     try {
       const res = await fetch('/api/auth/student/login', {
@@ -28,13 +48,21 @@ export default function LoginPage() {
         return;
       }
 
-      const redirect = router;
-      redirect.push('/dashboard');
+      // Full page reload so Next.js prefetch cache can't serve a stale redirect.
+      window.location.href = '/dashboard';
     } catch {
       setError('Something went wrong. Try again.');
     } finally {
       setLoading(false);
     }
+  }
+
+  if (checking) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-100">
+        <div className="text-slate-600">Checking session…</div>
+      </div>
+    );
   }
 
   return (
@@ -59,8 +87,6 @@ export default function LoginPage() {
               required
               autoComplete="username"
               className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-slate-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-              value={loginId}
-              onChange={(e) => setLoginId(e.target.value)}
             />
           </div>
           <div>
@@ -74,8 +100,6 @@ export default function LoginPage() {
               maxLength={6}
               autoComplete="current-password"
               className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-slate-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-              value={pin}
-              onChange={(e) => setPin(e.target.value)}
             />
           </div>
 

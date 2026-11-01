@@ -5,6 +5,10 @@ import { supabaseAdmin } from '@/lib/supabase/admin';
 import { createStudentSession } from '@/lib/auth/sessions';
 import { rateLimit } from '@/lib/rate-limit';
 
+if (!process.env.SESSION_SECRET) {
+  throw new Error('SESSION_SECRET is required');
+}
+
 const schema = z.object({
   loginId: z.string().min(1, 'Login ID is required'),
   pin: z.string().min(1, 'PIN is required'),
