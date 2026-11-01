@@ -13,6 +13,7 @@ import {
   type PendingAnswer,
   type SessionCache,
 } from '@/lib/idb';
+import { isOfflineDisabled } from '@/lib/shutdown';
 
 type OptionLetter = 'A' | 'B' | 'C' | 'D';
 
@@ -22,22 +23,25 @@ interface Question {
   options: Record<OptionLetter, string>;
 }
 
-interface StartResponse {
-  sessionId: string;
-  endsAt: string;
-  resumed: boolean;
-  questions: Question[];
-}
-
 interface SessionResponse {
   sessionId: string;
   endsAt: string;
+  serverNow: string;
   questions: Question[];
   questionOrder: string[];
   optionOrders: Record<string, string[]>;
   submittedAt: string | null;
-  answers: Record<string, { letter: string; seq: number }>;
+  answers: Record<string, string>;
+  pausedSeconds: number;
 }
+
+type TestStatus =
+  | 'loading'
+  | 'load-failed'
+  | 'active'
+  | 'paused'
+  | 'submitting'
+  | 'submitted';
 
 const HEARTBEAT_MS = 15_000;
 const AUTOSAVE_DEBOUNCE_MS = 2_000;
@@ -46,22 +50,22 @@ const REQUEST_TIMEOUT_MS = 15_000;
 export default function TestPage() {
   const { sessionId: rawSessionId } = useParams();
   const sessionId = typeof rawSessionId === 'string' ? rawSessionId : rawSessionId?.[0] ?? '';
-  const searchParams = useSearchParams();
+  const [searchParams] = useSearchParams();
   const router = useRouter();
 
+  const [status, setStatus] = useState<TestStatus>('loading');
+  const [loadError, setLoadError] = useState('');
   const [questions, setQuestions] = useState<Question[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [timeRemaining, setTimeRemaining] = useState(0);
-  const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' && navigator.onLine);
   const [isPaused, setIsPaused] = useState(false);
-  const [pausedMinutesUsed, setPausedMinutesUsed] = useState(0);
-  const [submitting, setSubmitting] = useState(false);
+  const [pausedSeconds, setPausedSeconds] = useState(0);
   const [submitMessage, setSubmitMessage] = useState('');
   const [submitError, setSubmitError] = useState('');
 
   const serverEndsAtRef = useRef<string>('');
-  const offsetRef = useRef(0); // server_now - local_now at last sync
+  const offsetRef = useRef(0);
   const lastSyncLocalRef = useRef(0);
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -69,120 +73,141 @@ export default function TestPage() {
   let pendingDirty = false;
   let seq = 0;
 
-  // ---- Sync pending answers from IndexedDB into local state ----
-  useEffect(() => {
-    if (!sessionId || sessionId === 'new') return;
-    getPendingAnswers(sessionId).then((pending) => {
-      const byQuestion: Record<string, string> = {};
-      pending.forEach((p) => {
-        // Keep the highest seq per question.
-        const cur = byQuestion[p.questionId];
-        if (!cur || p.seq > (pending.find((x) => x.questionId === p.questionId)?.seq ?? 0)) {
-          byQuestion[p.questionId] = p.letter;
-        }
-      });
-      setAnswers((prev) => ({ ...prev, ...byQuestion }));
-    });
-  }, [sessionId]);
+  // Deterministic initial state: no online/offline reading during first render.
+  // status starts as 'loading'; we never start as 'offline' or 'paused'.
 
-  // ---- Start a new session (sessionId === 'new') ----
+  // ---- Load session ----
   useEffect(() => {
-    if (sessionId !== 'new') return;
-    const courseId = searchParams?.get('courseId');
-    if (!courseId) {
-      setSubmitError('No course specified.');
+    if (!sessionId || sessionId === 'new') {
+      const courseId = searchParams?.get('courseId');
+      if (!courseId) {
+        setStatus('load-failed');
+        setLoadError('No course specified.');
+        return;
+      }
+      (async () => {
+        try {
+          const res = await fetch('/api/test/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ courseId }),
+          });
+          const json = await res.json();
+          if (!res.ok) {
+            setStatus('load-failed');
+            setLoadError(json.error || 'Could not start test.');
+            return;
+          }
+          router.replace(`/test/${json.sessionId}`);
+        } catch (err: any) {
+          setStatus('load-failed');
+          setLoadError(err.message || 'Could not start test.');
+        }
+      })();
       return;
     }
-    (async () => {
-      try {
-        const res = await fetch('/api/test/start', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ courseId }),
-        });
-        const json = await res.json();
-        if (!res.ok) {
-          setSubmitError(json.error || 'Could not start test.');
-          return;
-        }
-        router.replace(`/test/${json.sessionId}`);
-      } catch {
-        setSubmitError('Could not start test. Check your connection.');
-      }
-    })();
-  }, [sessionId, searchParams, router]);
 
-  // ---- Load an existing session ----
-  useEffect(() => {
-    if (!sessionId || sessionId === 'new') return;
+    let cancelled = false;
+
     (async () => {
       // Try IndexedDB cache first (instant restore on weak connection).
       let cached: SessionCache | null = null;
-      try { cached = await getCachedSession(sessionId); } catch {}
+      if (!isOfflineDisabled()) {
+        try { cached = await getCachedSession(sessionId); } catch {}
+      }
 
       let serverData: SessionResponse | null = null;
       try {
         const res = await fetch(`/api/test/session?sessionId=${sessionId}`, {
           headers: { 'Cache-Control': 'no-store' },
         });
-        if (res.ok) serverData = await res.json();
-      } catch {}
-
-      if (serverData) {
-        if (serverData.submittedAt) {
-          router.replace(`/result/${serverData.sessionId}`);
+        if (!res.ok) {
+          if (res.status === 401 || res.status === 403) {
+            if (!cancelled) {
+              setStatus('load-failed');
+              setLoadError('Session expired. Please log in again.');
+              setTimeout(() => router.push('/login'), 1500);
+            }
+            return;
+          }
+          throw new Error(`Server returned ${res.status}`);
+        }
+        serverData = await res.json();
+      } catch (err: any) {
+        // Network failure — try cache as fallback
+        if (cancelled) return;
+        if (cached) {
+          setQuestions(cached.questions);
+          setAnswers(
+            Object.fromEntries(
+              Object.entries((await getPendingAnswers(sessionId)) ?? []).map((p) => [p.questionId, p.letter])
+            )
+          );
+          serverEndsAtRef.current = cached.endsAt;
+          setStatus('active');
+          setIsPaused(true);
+          setSubmitMessage('Running from cached session. Reconnecting to server…');
+          startTick();
+          startHeartbeat();
           return;
         }
-        setQuestions(serverData.questions);
-        setAnswers(
-          Object.fromEntries(
-            Object.entries(serverData.answers ?? {}).map(([qId, v]) => [qId, (v as { letter: string }).letter])
-          )
-        );
-        serverEndsAtRef.current = serverData.endsAt;
-        syncTimer(serverData.endsAt);
-        cacheSession({
+        setStatus('load-failed');
+        setLoadError(err.message || 'Could not load your test.');
+        return;
+      }
+
+      if (cancelled) return;
+
+      if (serverData.submittedAt) {
+        router.replace(`/result/${serverData.sessionId}`);
+        return;
+      }
+
+      setQuestions(serverData.questions);
+      setAnswers(serverData.answers);
+      serverEndsAtRef.current = serverData.endsAt;
+      setPausedSeconds(serverData.pausedSeconds ?? 0);
+      syncTimer(serverData.endsAt, serverData.serverNow);
+      setStatus('active');
+
+      if (!isOfflineDisabled()) {
+        void cacheSession({
           sessionId: serverData.sessionId,
-          courseId: '', // not needed for resume UI
+          courseId: '',
           endsAt: serverData.endsAt,
           durationMinutes: 0,
           questions: serverData.questions,
           questionOrder: serverData.questionOrder,
           optionOrders: serverData.optionOrders,
           startedAt: '',
-        }).catch(() => {});
-        startHeartbeat();
-        startTick();
-      } else if (cached) {
-        // Cache only: no server contact possible yet.
-        setQuestions(cached.questions);
-        serverEndsAtRef.current = cached.endsAt;
-        syncTimer(cached.endsAt);
-        startTick();
-        setIsPaused(true);
-        setSubmitMessage('Running from cached session. Reconnecting to server…');
-      } else {
-        setSubmitError('Could not load this test session.');
+        });
       }
+
+      startHeartbeat();
+      startTick();
     })();
 
     return () => {
+      cancelled = true;
       stopHeartbeat();
       stopTick();
     };
-  }, [sessionId, router]);
+  }, [sessionId, searchParams, router]);
 
-  // ---- Online/offline detection ----
+  // ---- Online/offline detection (only after mount) ----
   useEffect(() => {
     const onOnline = () => {
-      setIsOnline(true);
       setIsPaused(false);
       setSubmitMessage('');
-      syncPendingAnswers();
+      void syncPendingAnswers();
       startHeartbeat();
     };
     const onOffline = () => {
-      setIsOnline(false);
+      // Only show pause overlay if we're already active (not loading/failed)
+      if (status === 'active') {
+        setIsPaused(true);
+        setSubmitMessage('Connection lost. Your timer is paused and your answers are saved. Reconnect to continue.');
+      }
     };
     window.addEventListener('online', onOnline);
     window.addEventListener('offline', onOffline);
@@ -190,19 +215,20 @@ export default function TestPage() {
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
     };
-  }, []);
+  }, [status]);
 
-  // ---- Timer sync from heartbeat ----
-  const syncTimer = useCallback((endsAt: string) => {
+  // ---- Timer sync ----
+  const syncTimer = useCallback((endsAt: string, serverNow?: string) => {
     serverEndsAtRef.current = endsAt;
-    const serverNow = Date.now(); // heartbeat updates offsetRef itself
-    lastSyncLocalRef.current = serverNow;
+    if (serverNow) {
+      offsetRef.current = new Date(serverNow).getTime() - Date.now();
+    }
+    lastSyncLocalRef.current = Date.now();
   }, []);
 
   const computeRemaining = useCallback((): number => {
     if (!serverEndsAtRef.current) return 0;
     const ends = new Date(serverEndsAtRef.current).getTime();
-    // Approximate server now = local now + offset.
     const serverNow = Date.now() + offsetRef.current;
     return Math.max(0, Math.floor((ends - serverNow) / 1000));
   }, []);
@@ -217,7 +243,7 @@ export default function TestPage() {
         body: JSON.stringify({ sessionId, clientSeq: seq }),
       });
       if (!res.ok) {
-        handleDisconnect();
+        // Server reached but error — don't show "Connection lost"
         return;
       }
       const json = await res.json();
@@ -225,24 +251,18 @@ export default function TestPage() {
       lastSyncLocalRef.current = Date.now();
       serverEndsAtRef.current = json.endsAt;
       setIsPaused(false);
-      setIsOnline(true);
       setSubmitMessage('');
-      setPausedMinutesUsed(Math.round(json.pausedSeconds / 60));
+      setPausedSeconds(json.pausedSeconds ?? 0);
       if (json.allowanceExhausted) {
         setSubmitMessage('Pause allowance used up — the clock now runs normally.');
       }
     } catch {
-      handleDisconnect();
+      // Network failure — handled by offline event
     }
   }
 
-  function handleDisconnect() {
-    setIsPaused(true);
-    setIsOnline(false);
-    setSubmitMessage('Connection lost. Your timer is paused and your answers are saved. Reconnect to continue.');
-  }
-
   function startHeartbeat() {
+    if (isOfflineDisabled()) return;
     stopHeartbeat();
     heartbeatTimer = setInterval(doHeartbeat, HEARTBEAT_MS);
     doHeartbeat();
@@ -252,7 +272,7 @@ export default function TestPage() {
     heartbeatTimer = null;
   }
 
-  // ---- Tick (countdown) ----
+  // ---- Tick ----
   function startTick() {
     stopTick();
     tickTimer = setInterval(() => {
@@ -271,7 +291,7 @@ export default function TestPage() {
     tickTimer = null;
   }
 
-  // ---- Autosave (debounced, optimistic) ----
+  // ---- Autosave (debounced, optimistic, non-blocking) ----
   const markDirty = useCallback(() => {
     pendingDirty = true;
     if (autosaveTimer) clearTimeout(autosaveTimer);
@@ -284,19 +304,26 @@ export default function TestPage() {
     if (pending.length === 0 && !pendingDirty) return;
     pendingDirty = false;
 
-    // Build the payload: latest answer per question.
     const latestByQuestion: Record<string, { letter: string; seq: number }> = {};
     pending.forEach((p) => {
       const cur = latestByQuestion[p.questionId];
       if (!cur || p.seq > cur.seq) latestByQuestion[p.questionId] = { letter: p.letter, seq: p.seq };
     });
 
-    // Also include current in-memory answers not yet persisted.
     Object.entries(answers).forEach(([qId, letter]) => {
       if (!latestByQuestion[qId]) {
         seq += 1;
         latestByQuestion[qId] = { letter, seq };
-        savePendingAnswer({ id: `${sessionId}:${qId}`, sessionId, questionId: qId, letter, seq, ts: Date.now() });
+        if (!isOfflineDisabled()) {
+          void savePendingAnswer({
+            id: `${sessionId}:${qId}`,
+            sessionId,
+            questionId: qId,
+            letter,
+            seq,
+            ts: Date.now(),
+          });
+        }
       }
     });
 
@@ -309,11 +336,9 @@ export default function TestPage() {
         body: JSON.stringify({ sessionId, answers: latestByQuestion, clientSeq: seq }),
       });
       if (res.ok) {
-        // Remove synced pending answers.
-        pending.forEach((p) => removePendingAnswer(p.id));
-        // Also clear in-memory ones we just sent.
+        pending.forEach((p) => void removePendingAnswer(p.id));
         Object.keys(latestByQuestion).forEach((qId) => {
-          removePendingAnswer(`${sessionId}:${qId}`);
+          void removePendingAnswer(`${sessionId}:${qId}`);
         });
       }
     } catch {
@@ -323,7 +348,7 @@ export default function TestPage() {
 
   // ---- Answer selection ----
   function selectOption(letter: OptionLetter) {
-    if (isPaused || submitting) return;
+    if (isPaused || status === 'submitting' || status === 'submitted') return;
     const qId = questions[currentIndex]?.id;
     if (!qId) return;
     setAnswers((prev) => {
@@ -331,50 +356,43 @@ export default function TestPage() {
       return next;
     });
     seq += 1;
-    void savePendingAnswer({
-      id: `${sessionId}:${qId}`,
-      sessionId,
-      questionId: qId,
-      letter,
-      seq,
-      ts: Date.now(),
-    });
+    if (!isOfflineDisabled()) {
+      void savePendingAnswer({
+        id: `${sessionId}:${qId}`,
+        sessionId,
+        questionId: qId,
+        letter,
+        seq,
+        ts: Date.now(),
+      });
+    }
     markDirty();
   }
 
-  // ---- Auto-submit (timer expiry) ----
+  // ---- Auto-submit ----
   async function autoSubmit() {
-    setSubmitting(true);
+    setStatus('submitting');
     setSubmitMessage('Time is up — submitting your test automatically…');
     await finalSubmit('auto_timeout');
   }
 
   // ---- Manual submit ----
   async function handleManualSubmit() {
+    if (status === 'submitting' || status === 'submitted') return;
     const unanswered = questions.filter((q) => !answers[q.id]).length;
     if (unanswered > 0) {
       if (!window.confirm(`You have ${unanswered} unanswered question(s). Submit anyway?`)) return;
     }
-    setSubmitting(true);
+    setStatus('submitting');
     setSubmitMessage('Submitting your test, do not close this page…');
     await finalSubmit('manual');
   }
 
-  // ---- Final submit (with retry) ----
+  // ---- Final submit (with retry, never awaits IndexedDB) ----
   async function finalSubmit(submitType: 'manual' | 'auto_timeout') {
     if (!sessionId || sessionId === 'new') return;
-    // Ensure all pending answers are included as a fallback.
-    await syncPendingAnswers();
 
-    const payload = {
-      sessionId,
-      answers: Object.entries(answers).map(([qId, letter]) => ({
-        [qId]: { letter, seq: 0 },
-      })),
-      clientSeq: seq,
-    } as any;
-
-    // Flatten answers into the expected shape.
+    // Build payload from in-memory answers only — never await IndexedDB.
     const flatAnswers: Record<string, { letter: string; seq: number }> = {};
     Object.entries(answers).forEach(([qId, letter], i) => {
       flatAnswers[qId] = { letter, seq: i + 1 };
@@ -390,9 +408,11 @@ export default function TestPage() {
         });
         if (res.ok) {
           const json = await res.json();
-          await clearPendingAnswers(sessionId);
-          await removeCachedSession(sessionId);
-          setSubmitting(false);
+          if (!isOfflineDisabled()) {
+            await clearPendingAnswers(sessionId).catch(() => {});
+            await removeCachedSession(sessionId).catch(() => {});
+          }
+          setStatus('submitted');
           setSubmitMessage('Submitted. Your test has been graded.');
           stopTick();
           stopHeartbeat();
@@ -404,13 +424,14 @@ export default function TestPage() {
       } catch (err: any) {
         lastErr = err;
       }
-      // Exponential backoff before retry.
       await new Promise((r) => setTimeout(r, Math.min(1000 * 2 ** attempt, 30_000)));
     }
 
-    setSubmitting(false);
+    setStatus('active');
     setSubmitError(lastErr?.message || 'Submit is retrying in the background. Do not close this page.');
-    // Keep retrying periodically.
+    setSubmitMessage('');
+
+    // Keep retrying periodically in background
     const retry = setInterval(async () => {
       try {
         const res = await fetchWithTimeout('/api/test/submit', {
@@ -420,9 +441,11 @@ export default function TestPage() {
         });
         if (res.ok) {
           const json = await res.json();
-          await clearPendingAnswers(sessionId);
-          await removeCachedSession(sessionId);
-          setSubmitting(false);
+          if (!isOfflineDisabled()) {
+            await clearPendingAnswers(sessionId).catch(() => {});
+            await removeCachedSession(sessionId).catch(() => {});
+          }
+          setStatus('submitted');
           setSubmitMessage('Submitted. Your test has been graded.');
           stopTick();
           stopHeartbeat();
@@ -447,20 +470,21 @@ export default function TestPage() {
     }
   }
 
-  // ---- Beforeunload: persist pending answers ----
+  // ---- Persist on beforeunload ----
   useEffect(() => {
     const onBeforeUnload = () => {
-      // Persist any in-memory answers not yet saved.
       Object.entries(answers).forEach(([qId, letter], i) => {
         seq += 1;
-        void savePendingAnswer({
-          id: `${sessionId}:${qId}`,
-          sessionId,
-          questionId: qId,
-          letter,
-          seq,
-          ts: Date.now(),
-        });
+        if (!isOfflineDisabled()) {
+          void savePendingAnswer({
+            id: `${sessionId}:${qId}`,
+            sessionId,
+            questionId: qId,
+            letter,
+            seq,
+            ts: Date.now(),
+          });
+        }
       });
     };
     window.addEventListener('beforeunload', onBeforeUnload);
@@ -470,7 +494,7 @@ export default function TestPage() {
   // ---- Keyboard shortcuts ----
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (isPaused || submitting) return;
+      if (isPaused || status === 'submitting' || status === 'submitted') return;
       if (e.key >= '1' && e.key <= '4') {
         const idx = parseInt(e.key) - 1;
         const opt = ['A', 'B', 'C', 'D'][idx] as OptionLetter;
@@ -487,39 +511,61 @@ export default function TestPage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [questions, isPaused, submitting]);
+  }, [questions, isPaused, status]);
 
-  // When reconnecting after pause, sync pending answers.
-  useEffect(() => {
-    if (isOnline && !isPaused) {
-      void syncPendingAnswers();
-    }
-  }, [isOnline, isPaused, sessionId]);
+  // ---- Render ----
 
-  if (!isOnline || isPaused) {
+  // Loading skeleton
+  if (status === 'loading') {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-900">
-        <div className="max-w-md p-6 bg-white rounded-xl shadow-2xl border border-slate-200 text-center">
-          <div className="text-yellow-500 text-4xl mb-4">⚠️</div>
-          <h2 className="text-xl font-bold text-slate-900 mb-2">Connection Lost</h2>
-          <p className="text-slate-600 mb-4">
-            Your timer is paused and your answers are saved. Answering is
-            locked until the connection returns.
-          </p>
-          {pausedMinutesUsed > 0 && (
-            <p className="text-sm text-slate-500 mb-4">
-              Pause time used: {pausedMinutesUsed} minute(s)
-            </p>
-          )}
-          <p className="text-sm text-slate-400">{submitMessage || 'Reconnecting automatically…'}</p>
-          <div className="mt-6">
-            <button
-              onClick={() => void syncPendingAnswers()}
-              className="px-4 py-2 rounded-md bg-blue-600 text-white text-sm hover:bg-blue-700"
-            >
-              Try reconnecting now
+      <div className="min-h-screen bg-slate-50 p-4">
+        <div className="max-w-3xl mx-auto">
+          <div className="flex items-center justify-between mb-4">
+            <h1 className="text-lg font-bold text-slate-900">Loading test…</h1>
+            <div className="px-4 py-2 rounded-lg bg-slate-200 text-slate-700 font-bold">--:--</div>
+          </div>
+          <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm mb-6">
+            <div className="h-8 bg-slate-200 rounded w-full mb-4"></div>
+            <div className="h-4 bg-slate-200 rounded w-3/4"></div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="h-12 bg-slate-200 rounded"></div>
+              ))}
+            )}
+          </div>
+          <div className="flex items-center justify-between">
+            <button className="px-5 py-2.5 rounded-lg border border-slate-300 text-slate-700" disabled>
+              Previous
+            </button>
+            <button className="px-5 py-2.5 rounded-lg border border-slate-300 text-slate-700" disabled>
+              Next
+            </button>
+            <button className="px-6 py-2.5 rounded-lg bg-slate-200 text-slate-400" disabled>
+              Submit Test
             </button>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Load failed
+  if (status === 'load-failed') {
+    return (
+      <div className="min-h-screen bg-slate-50 p-4 flex items-center justify-center">
+        <div className="max-w-md bg-white rounded-lg border border-slate-200 p-6 shadow-sm text-center">
+          <h2 className="text-xl font-bold text-slate-900 mb-2">Could not load your test</h2>
+          <p className="text-slate-600 mb-4">{loadError}</p>
+          <button
+            onClick={() => {
+              setStatus('loading');
+              setLoadError('');
+              router.refresh();
+            }}
+            className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
+          >
+            Retry
+          </button>
         </div>
       </div>
     );
@@ -536,6 +582,18 @@ export default function TestPage() {
           >
             Back to dashboard
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Submitted
+  if (status === 'submitted') {
+    return (
+      <div className="min-h-screen bg-slate-50 p-4 flex items-center justify-center">
+        <div className="max-w-md bg-white rounded-lg border border-slate-200 p-6 shadow-sm text-center">
+          <h2 className="text-xl font-bold text-slate-900 mb-2">Submitted</h2>
+          <p className="text-slate-600">{submitMessage}</p>
         </div>
       </div>
     );
@@ -575,6 +633,23 @@ export default function TestPage() {
           </div>
         )}
 
+        {/* Offline pause overlay — only appears AFTER first successful load */}
+        {isPaused && status === 'active' && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/90 backdrop-blur-sm">
+            <div className="bg-white rounded-lg p-6 max-w-md w-full shadow-xl text-center">
+              <div className="text-yellow-500 text-4xl mb-4">⚠️</div>
+              <h2 className="text-xl font-bold text-slate-900 mb-2">Connection Lost</h2>
+              <p className="text-slate-600 mb-4">
+                Your timer is paused and your answers are saved. Answering is locked until the connection returns.
+              </p>
+              <p className="text-sm text-slate-500 mb-4">
+                Pause time used: {Math.floor(pausedSeconds / 60)}m {pausedSeconds % 60}s
+              </p>
+              <p className="text-sm text-slate-400">Reconnecting automatically…</p>
+            </div>
+          </div>
+        )}
+
         {/* Question card */}
         <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm mb-6">
           <div className="text-lg text-slate-800 mb-6 leading-relaxed">
@@ -587,6 +662,7 @@ export default function TestPage() {
                 <button
                   key={letter}
                   onClick={() => selectOption(letter as OptionLetter)}
+                  disabled={isPaused || status === 'submitting'}
                   className={`w-full text-left px-4 py-3 rounded-lg border text-left ${
                     selected
                       ? 'bg-blue-100 border-blue-600 text-blue-700 font-semibold'
@@ -614,6 +690,7 @@ export default function TestPage() {
                 <button
                   key={i}
                   onClick={() => setCurrentIndex(i)}
+                  disabled={isPaused || status === 'submitting'}
                   className={`w-8 h-8 rounded-full text-xs font-semibold ${
                     currentq
                       ? 'bg-blue-600 text-white'
@@ -633,7 +710,7 @@ export default function TestPage() {
         <div className="flex items-center justify-between">
           <button
             onClick={() => setCurrentIndex((i) => (i > 0 ? i - 1 : questions.length - 1))}
-            disabled={currentIndex === 0 || isPaused || submitting}
+            disabled={currentIndex === 0 || isPaused || status === 'submitting'}
             className="px-5 py-2.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
             Previous
@@ -641,8 +718,9 @@ export default function TestPage() {
 
           <button
             onClick={() =>
-              setCurrentIndex((i) => (i < questions.length - 1 ? i + 1 : 0))}
-            disabled={currentIndex === questions.length - 1 || isPaused || submitting}
+              setCurrentIndex((i) => (i < questions.length - 1 ? i + 1 : 0))
+            }
+            disabled={currentIndex === questions.length - 1 || isPaused || status === 'submitting'}
             className="px-5 py-2.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
             Next
@@ -650,10 +728,10 @@ export default function TestPage() {
 
           <button
             onClick={handleManualSubmit}
-            disabled={isPaused || submitting}
+            disabled={isPaused || status === 'submitting' || status === 'submitted'}
             className="px-6 py-2.5 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 disabled:opacity-60"
           >
-            {submitting ? 'Submitting…' : 'Submit Test'}
+            {status === 'submitting' ? 'Submitting…' : 'Submit Test'}
           </button>
         </div>
       </div>

@@ -12,7 +12,7 @@ export interface TestSession {
   student_id: string;
   course_id: string;
   question_order: string[];
-  option_orders: Record<string, string[]>; // question_id -> shuffled original letters
+  option_orders: Record<string, string[]>;
   answers: Record<string, { letter: string; seq: number }>;
   started_at: string | null;
   ends_at: string | null;
@@ -25,10 +25,6 @@ export interface TestSession {
   last_client_seq: number;
 }
 
-/**
- * Create a new test session. Caller (route handler) is responsible for
- * computing the shuffle and ends_at server-side.
- */
 export async function createSession(input: {
   studentId: string;
   courseId: string;
@@ -54,7 +50,6 @@ export async function createSession(input: {
   return data as TestSession;
 }
 
-/** Fetch a session by id (service-role, caller enforces ownership). */
 export async function getSession(sessionId: string): Promise<TestSession | null> {
   const { data, error } = await supabaseAdmin
     .from('test_sessions')
@@ -66,12 +61,6 @@ export async function getSession(sessionId: string): Promise<TestSession | null>
   return (data ?? null) as TestSession | null;
 }
 
-/**
- * Save answers idempotently using a client sequence number.
- * `answers` maps question_id -> { letter, seq }.
- * Only entries with seq > the stored seq for that question are applied.
- * last_client_seq is raised to the max seq seen.
- */
 export async function saveAnswers(input: {
   sessionId: string;
   answers: Record<string, { letter: string; seq: number }>;
@@ -98,7 +87,6 @@ export async function saveAnswers(input: {
   if (input.clientSeq > maxSeq) maxSeq = input.clientSeq;
 
   if (!changed && maxSeq === session.last_client_seq) {
-    // Nothing new to persist.
     return { accepted: 0, lastClientSeq: session.last_client_seq };
   }
 
@@ -114,12 +102,6 @@ export async function saveAnswers(input: {
   return { accepted: changed ? Object.keys(input.answers).length : 0, lastClientSeq: maxSeq };
 }
 
-/**
- * Heartbeat: update last_heartbeat_at, compute pause credit if there was a
- * gap, push ends_at forward within the course's max_pause_minutes allowance.
- * Returns { serverNow, endsAt, pausedSeconds, disconnectCount,
- *   remainingAllowanceSeconds, allowanceExhausted }.
- */
 export async function heartbeat(input: {
   sessionId: string;
   clientSeq: number;
@@ -134,7 +116,6 @@ export async function heartbeat(input: {
   const session = await getSession(input.sessionId);
   if (!session) throw new Error('Session not found');
 
-  // Fetch course for max_pause_minutes.
   const { data: course } = await supabaseAdmin
     .from('courses')
     .select('max_pause_minutes, duration_minutes')
@@ -158,9 +139,7 @@ export async function heartbeat(input: {
     const gapSeconds = gapMs / 1000;
 
     if (gapSeconds > 45) {
-      // Disconnect detected since last heartbeat.
       disconnectCount += 1;
-      // Pause credit for this gap, subtract the expected 15s heartbeat interval.
       const pauseSeconds = Math.max(0, gapSeconds - 15);
       const remaining = maxPauseSeconds - pausedSeconds;
       const actualPause = Math.min(pauseSeconds, remaining);
@@ -194,12 +173,11 @@ export async function heartbeat(input: {
   };
 }
 
-/** Mark a session as manually submitted (client-side submit). */
 export async function markSubmitted(input: {
   sessionId: string;
   submitType: 'manual' | 'admin_forced';
   submittedAt: string;
-  answers: Record<string, string>; // question_id -> original letter
+  answers: Record<string, string>;
 }) {
   const { error } = await supabaseAdmin
     .from('test_sessions')
@@ -215,7 +193,6 @@ export async function markSubmitted(input: {
   if (error) throw error;
 }
 
-/** Admin: force-submit an in-progress session. */
 export async function forceSubmit(sessionId: string) {
   return markSubmitted({
     sessionId,
@@ -225,7 +202,6 @@ export async function forceSubmit(sessionId: string) {
   });
 }
 
-/** Admin: extend a session's ends_at by N minutes. */
 export async function extendTime(sessionId: string, minutes: number) {
   const session = await getSession(sessionId);
   if (!session) throw new Error('Session not found');
@@ -238,10 +214,7 @@ export async function extendTime(sessionId: string, minutes: number) {
   return { endsAt: new Date(endsAt).toISOString() };
 }
 
-/** Admin: reset an attempt (delete session + result). */
 export async function resetAttempt(sessionId: string) {
-  // test_results has ON DELETE CASCADE via session_id unique? No — results
-  // reference sessions. Delete result first, then session.
   await supabaseAdmin.from('test_results').delete().eq('session_id', sessionId);
   const { error } = await supabaseAdmin.from('test_sessions').delete().eq('id', sessionId);
   if (error) throw error;

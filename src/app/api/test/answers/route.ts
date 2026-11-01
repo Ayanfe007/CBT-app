@@ -14,24 +14,30 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request) {
-  const session = await verifyStudentSession();
-  if (!session) {
-    return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 });
-  }
-
-  const parsed = schema.safeParse(await req.json());
-  if (!parsed.success) {
-    return NextResponse.json({ error: 'Invalid request.' }, { status: 400 });
-  }
-
   try {
-    const result = await saveAnswers({
-      sessionId: parsed.data.sessionId,
-      answers: parsed.data.answers,
-      clientSeq: parsed.data.clientSeq,
-    });
-    return NextResponse.json({ ok: true, ...result });
+    const student = await verifyStudentSession();
+    if (!student) {
+      return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 });
+    }
+
+    const parsed = schema.safeParse(await req.json());
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'Invalid request.' }, { status: 400 });
+    }
+
+    try {
+      const result = await saveAnswers({
+        sessionId: parsed.data.sessionId,
+        answers: parsed.data.answers,
+        clientSeq: parsed.data.clientSeq,
+      });
+      return NextResponse.json({ ok: true, ...result });
+    } catch (err: any) {
+      console.error('[/api/test/answers] error:', err);
+      return NextResponse.json({ error: err.message || 'Save failed.' }, { status: 400 });
+    }
   } catch (err: any) {
-    return NextResponse.json({ error: err.message || 'Save failed.' }, { status: 400 });
+    console.error('[/api/test/answers] fatal:', err);
+    return NextResponse.json({ error: err.message || 'Save failed.' }, { status: 500 });
   }
 }
