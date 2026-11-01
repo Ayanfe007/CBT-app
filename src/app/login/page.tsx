@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { studentLoginSchema } from '@/lib/validators';
 
 export default function LoginPage() {
   const [error, setError] = useState('');
@@ -8,7 +9,6 @@ export default function LoginPage() {
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
-    // Verify existing session on mount; if valid, go to dashboard.
     async function checkSession() {
       try {
         const res = await fetch('/api/auth/session/verify', {
@@ -32,8 +32,17 @@ export default function LoginPage() {
     setLoading(true);
 
     const formData = new FormData(e.currentTarget as HTMLFormElement);
-    const loginId = formData.get('loginId') as string;
-    const pin = formData.get('pin') as string;
+    const loginId = (formData.get('loginId') as string).trim().toLowerCase();
+    const pin = (formData.get('pin') as string).trim();
+
+    // Client-side validation using shared schema
+    const parsed = studentLoginSchema.safeParse({ loginId, pin });
+    if (!parsed.success) {
+      const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('. ');
+      setError(issues || 'Invalid request.');
+      setLoading(false);
+      return;
+    }
 
     try {
       const res = await fetch('/api/auth/student/login', {
@@ -48,7 +57,6 @@ export default function LoginPage() {
         return;
       }
 
-      // Full page reload so Next.js prefetch cache can't serve a stale redirect.
       window.location.href = '/dashboard';
     } catch {
       setError('Something went wrong. Try again.');
@@ -83,6 +91,7 @@ export default function LoginPage() {
             </label>
             <input
               id="loginId"
+              name="loginId"
               type="text"
               required
               autoComplete="username"
@@ -95,6 +104,7 @@ export default function LoginPage() {
             </label>
             <input
               id="pin"
+              name="pin"
               type="password"
               required
               maxLength={6}

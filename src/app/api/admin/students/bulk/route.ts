@@ -3,22 +3,11 @@ import { hash } from 'bcryptjs';
 import { NextResponse } from 'next/server';
 import { verifyAdminSession } from '@/lib/auth/verify';
 import { supabaseAdmin } from '@/lib/supabase/admin';
+import { loginIdSchema } from '@/lib/validators';
 
 const bulkSchema = z.object({
   names: z.string().min(1),
 });
-
-function generateLoginId(fullName: string, idx: number): string {
-  const base = fullName
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '');
-  return `${base}_${idx + 1000}`;
-}
-
-function generatePin(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
 
 export const runtime = 'nodejs';
 
@@ -52,13 +41,12 @@ export async function POST(req: Request) {
       regNumber = line.slice(commaIdx + 1).trim();
     }
     const full_name = name || `Student ${idx + 1}`;
-    const login_id = regNumber || generateLoginId(full_name, idx);
-    const pin = generatePin();
+    const login_id = regNumber || `student_${idx + 1000}`;
+    const pin = Math.floor(100000 + Math.random() * 900000).toString();
     credentials.push({ full_name, login_id, pin });
     rows.push({ full_name, login_id, pin_hash: '' }); // filled below
   });
 
-  // Hash each PIN properly.
   const finalRows = await Promise.all(
     rows.map(async (r, i) => ({
       ...r,

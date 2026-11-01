@@ -4,15 +4,11 @@ import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { createStudentSession } from '@/lib/auth/sessions';
 import { rateLimit } from '@/lib/rate-limit';
+import { studentLoginSchema } from '@/lib/validators';
 
 if (!process.env.SESSION_SECRET) {
   throw new Error('SESSION_SECRET is required');
 }
-
-const schema = z.object({
-  loginId: z.string().min(1, 'Login ID is required'),
-  pin: z.string().min(1, 'PIN is required'),
-});
 
 export const runtime = 'nodejs';
 
@@ -23,9 +19,26 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Too many attempts. Try again later.' }, { status: 429 });
   }
 
-  const parsed = schema.safeParse(await req.json());
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json(
+      { error: 'Invalid JSON body.' },
+      { status: 400 }
+    );
+  }
+
+  console.log('[student-login] received body keys:', Object.keys(body ?? {}));
+
+  const parsed = studentLoginSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: 'Invalid request.' }, { status: 400 });
+    const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`);
+    console.log('[student-login] zod validation failed:', issues);
+    return NextResponse.json(
+      { error: 'Validation failed.', issues },
+      { status: 400 }
+    );
   }
 
   const { loginId, pin } = parsed.data;
@@ -36,7 +49,12 @@ export async function POST(req: Request) {
     .eq('login_id', loginId)
     .maybeSingle();
 
-  if (error || !student || !student.is_active) {
+  if (error) {
+    console.log('[student-login] supabase error:', error.message);
+    return NextResponse.json({ error: 'Invalid login ID or PIN.' }, { status: 401 });
+  }
+
+  if (!student || !student.is_active) {
     return NextResponse.json({ error: 'Invalid login ID or PIN.' }, { status: 401 });
   }
 

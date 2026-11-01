@@ -3,25 +3,14 @@ import { hash } from 'bcryptjs';
 import { NextResponse } from 'next/server';
 import { verifyAdminSession } from '@/lib/auth/verify';
 import { supabaseAdmin } from '@/lib/supabase/admin';
+import { loginIdSchema } from '@/lib/validators';
 
 const studentSchema = z.object({
   full_name: z.string().min(1),
-  login_id: z.string().min(1).optional(),
-  pin: z.string().min(4).max(6).optional(),
+  login_id: loginIdSchema.optional(),
+  pin: z.string().optional(),
   is_active: z.boolean().default(true),
 });
-
-function generateLoginId(fullName: string): string {
-  const base = fullName
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '');
-  return `${base}_${Math.floor(1000 + Math.random() * 9000)}`;
-}
-
-function generatePin(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
 
 export const runtime = 'nodejs';
 
@@ -45,8 +34,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Invalid input.' }, { status: 400 });
   }
 
-  const loginId = parsed.data.login_id || generateLoginId(parsed.data.full_name);
-  const pin = parsed.data.pin || generatePin();
+  const loginId = parsed.data.login_id
+    ? parsed.data.login_id.trim().toLowerCase()
+    : `student_${Math.floor(1000 + Math.random() * 9000)}`;
+  const pin = parsed.data.pin || Math.floor(100000 + Math.random() * 900000).toString();
   const pinHash = await hash(pin, 10);
 
   const { data, error } = await supabaseAdmin
@@ -62,6 +53,5 @@ export async function POST(req: Request) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
-  // Return the PIN once — it is stored hashed only.
   return NextResponse.json({ student: data, pin });
 }
