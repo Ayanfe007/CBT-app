@@ -73,6 +73,7 @@ export default function TestPage() {
   let pendingDirty = false;
   let seq = 0;
 
+  // ---------------- Load session ----------------
   useEffect(() => {
     if (!sessionId || sessionId === 'new') {
       const courseId = searchParams?.get('courseId');
@@ -156,7 +157,6 @@ export default function TestPage() {
         return;
       }
 
-      // Safety: if questions array is empty, something is wrong
       if (!serverData.questions || serverData.questions.length === 0) {
         setStatus('load-failed');
         setLoadError('No questions found for this session. Please contact your admin.');
@@ -194,6 +194,7 @@ export default function TestPage() {
     };
   }, [sessionId, searchParams, router]);
 
+  // ---------------- Online/offline detection ----------------
   useEffect(() => {
     const onOnline = () => {
       setIsPaused(false);
@@ -215,6 +216,7 @@ export default function TestPage() {
     };
   }, [status]);
 
+  // ---------------- Timer ----------------
   const syncTimer = useCallback((endsAt: string, serverNow?: string) => {
     serverEndsAtRef.current = endsAt;
     if (serverNow) {
@@ -230,6 +232,7 @@ export default function TestPage() {
     return Math.max(0, Math.floor((ends - serverNow) / 1000));
   }, []);
 
+  // ---------------- Heartbeat ----------------
   async function doHeartbeat() {
     if (!sessionId || sessionId === 'new') return;
     try {
@@ -265,6 +268,7 @@ export default function TestPage() {
     heartbeatTimer = null;
   }
 
+  // ---------------- Tick ----------------
   function startTick() {
     stopTick();
     tickTimer = setInterval(() => {
@@ -283,6 +287,7 @@ export default function TestPage() {
     tickTimer = null;
   }
 
+  // ---------------- Autosave ----------------
   const markDirty = useCallback(() => {
     pendingDirty = true;
     if (autosaveTimer) clearTimeout(autosaveTimer);
@@ -337,6 +342,7 @@ export default function TestPage() {
     }
   }
 
+  // ---------------- Answer selection ----------------
   function selectOption(letter: OptionLetter) {
     if (isPaused || status === 'submitting' || status === 'submitted') return;
     const qId = questions[currentIndex]?.id;
@@ -359,6 +365,7 @@ export default function TestPage() {
     markDirty();
   }
 
+  // ---------------- Submit ----------------
   async function autoSubmit() {
     setStatus('submitting');
     setSubmitMessage('Time is up — submitting your test automatically…');
@@ -465,6 +472,7 @@ export default function TestPage() {
     }, 10_000);
   }
 
+  // ---------------- Fetch with timeout ----------------
   async function fetchWithTimeout(url: string, opts: RequestInit) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -476,6 +484,7 @@ export default function TestPage() {
     }
   }
 
+  // ---------------- Persist on beforeunload ----------------
   useEffect(() => {
     const onBeforeUnload = () => {
       Object.entries(answers).forEach(([qId, letter], i) => {
@@ -496,6 +505,7 @@ export default function TestPage() {
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [sessionId, answers]);
 
+  // ---------------- Keyboard shortcuts ----------------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (isPaused || status === 'submitting' || status === 'submitted') return;
@@ -517,8 +527,9 @@ export default function TestPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [questions, isPaused, status]);
 
-  // ---- Render ----
+  // ---------------- Render ----------------
 
+  // Loading skeleton
   if (status === 'loading') {
     return (
       <div className="min-h-screen bg-slate-50 p-4">
@@ -541,6 +552,7 @@ export default function TestPage() {
     );
   }
 
+  // Load failed
   if (status === 'load-failed') {
     return (
       <div className="min-h-screen bg-slate-50 p-4 flex items-center justify-center">
