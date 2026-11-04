@@ -22,9 +22,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 });
     }
 
-    const parsed = schema.safeParse(await req.json());
+    const body = await req.json();
+    const parsed = schema.safeParse(body);
     if (!parsed.success) {
-      return NextResponse.json({ error: 'Invalid request.' }, { status: 400 });
+      console.error('[/api/test/submit] validation failed. Received keys:', Object.keys(body ?? {}), parsed.error.issues);
+      return NextResponse.json(
+        { error: 'Invalid request.', field: parsed.error.issues[0]?.path.join('.') ?? 'courseId', reason: parsed.error.issues[0]?.message ?? 'Invalid input' },
+        { status: 400 }
+      );
     }
 
     const { data: session, error: fetchErr } = await supabaseAdmin
@@ -93,6 +98,42 @@ export async function POST(req: Request) {
     }
 
     const submitType = 'manual';
+
+    // Grade first.
+    const graded = await gradeSession(parsed.data.sessionId);
+    if (!graded) {
+      return NextResponse.json({ error: 'Could not grade session.' }, { status: 500 });
+    }
+
+    // Upsert result row (idempotent on session_id). Do this BEFORE marking session submitted.
+    const { error: resultErr } = await supabaseAdmin
+      .from('test_results')
+      .upsert(
+        {
+          session_id: parsed.data.sessionId,
+          student_id: session.student_id,
+          course_id: session.course_id,
+          score: graded.score,
+          total_questions: graded.totalQuestions,
+          percentage: graded.percentage,
+          passed: graded.passed,
+          time_taken_seconds: graded.timeTakenSeconds,
+          submit_type: submitType,
+          paused_seconds: graded.pausedSeconds,
+          disconnect_count: graded.disconnectCount,
+        },
+        { onConflict: 'session_id' },
+      );
+
+    if (resultErr) {
+      console.error('[/api/test/submit] result insert failed:', resultErr);
+      return NextResponse.json(
+        { error: 'Failed to save result: ' + resultErr.message },
+        { status: 500 }
+      );
+    }
+
+    // Mark session submitted only after result is saved.
     await markSubmitted({
       sessionId: parsed.data.sessionId,
       submitType: submitType as 'manual',
@@ -100,13 +141,11 @@ export async function POST(req: Request) {
       answers: answersByLetter,
     });
 
-    const graded = await gradeSession(parsed.data.sessionId);
-
     return NextResponse.json({
       ok: true,
       submittedAt,
       expired,
-      graded,
+      graded: { ...graded, submitType },
     });
   } catch (err: any) {
     console.error('[/api/test/submit] error:', err);

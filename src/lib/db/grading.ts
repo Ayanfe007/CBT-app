@@ -16,6 +16,7 @@ export interface GradedResult {
   answers: Record<string, { letter: string; seq: number }>;
   questionOrder: string[];
   optionOrders: Record<string, string[]>;
+  created: boolean; // true if a new test_results row was inserted, false if updated existing
 }
 
 /**
@@ -46,49 +47,6 @@ export function shouldAbandon(
 ): boolean {
   if (abandonAfterMinutes <= 0) return false;
   return computeInactiveMinutes(session, nowMs) > abandonAfterMinutes;
-}
-
-/**
- * Shared abandon check used by finalizeExpiredSessions, the dashboard,
- * the start route, the session-load route and the admin monitor.
- *
- * If a session is unsubmitted and now minus coalesce(last_heartbeat_at, started_at)
- * exceeds the course's abandon_after_minutes threshold, mark it
- * submit_type = 'abandoned' with submitted_at = now and NO test_results row.
- * Returns true if the session was abandoned.
- */
-export async function checkAndFinalizeAbandoned(session: any): Promise<boolean> {
-  const course = await supabaseAdmin
-    .from('courses')
-    .select('abandon_after_minutes')
-    .eq('id', session.course_id)
-    .maybeSingle();
-
-  const abandonAfterMinutes = (course.data as any)?.abandon_after_minutes ?? 60;
-  if (abandonAfterMinutes <= 0) return false; // 0 disables
-
-  const now = new Date();
-  const lastHb = session.last_heartbeat_at
-    ? new Date(session.last_heartbeat_at).getTime()
-    : null;
-  const startedAt = session.started_at
-    ? new Date(session.started_at).getTime()
-    : null;
-  const referenceMs = lastHb ?? startedAt ?? now.getTime();
-
-  const inactiveMinutes = (now.getTime() - referenceMs) / 60000;
-  if (inactiveMinutes > abandonAfterMinutes) {
-    const submittedAt = now.toISOString();
-    await supabaseAdmin
-      .from('test_sessions')
-      .update({
-        submitted_at: submittedAt,
-        submit_type: 'abandoned',
-      })
-      .eq('id', session.id);
-    return true;
-  }
-  return false;
 }
 
 /**
@@ -154,14 +112,161 @@ export async function gradeSession(sessionId: string): Promise<GradedResult | nu
     answers,
     questionOrder: questionIds,
     optionOrders: (session.option_orders as Record<string, string[]>) ?? {},
+    created: false, // gradeSession alone doesn't write to DB
   };
+}
+
+/**
+ * Grade a session and upsert the result row into test_results.
+ * Idempotent: uses ON CONFLICT (session_id) so repeated calls never duplicate.
+ * Returns the graded result with `created` = true if a new row was inserted.
+ */
+export async function regradeSession(sessionId: string): Promise<GradedResult | null> {
+  const session = await getSession(sessionId);
+  if (!session) return null;
+  if (!session.submitted_at) {
+    throw new Error('Session is not submitted');
+  }
+
+  const graded = await gradeSession(sessionId);
+  if (!graded) return null;
+
+  // Upsert test_results (idempotent on session_id unique constraint).
+  const { error, count } = await supabaseAdmin
+    .from('test_results')
+    .upsert(
+      {
+        session_id: session.id,
+        student_id: session.student_id,
+        course_id: session.course_id,
+        score: graded.score,
+        total_questions: graded.totalQuestions,
+        percentage: graded.percentage,
+        passed: graded.passed,
+        time_taken_seconds: graded.timeTakenSeconds,
+        submit_type: graded.submitType,
+        paused_seconds: graded.pausedSeconds,
+        disconnect_count: graded.disconnectCount,
+      },
+      { onConflict: 'session_id' },
+    )
+    .select();
+
+  if (error) throw error;
+
+  // count is null for upsert without returning; determine created by checking if row existed before.
+  // We already know session.submitted_at is set; if no result existed, this is a create.
+  const { data: existing } = await supabaseAdmin
+    .from('test_results')
+    .select('id')
+    .eq('session_id', sessionId)
+    .maybeSingle();
+  // If existing was null before upsert, it's a create. But we just upserted, so existing is now set.
+  // Instead, check the upsert result: if count > 0, a row was affected.
+  const wasCreated = count === null || count > 0;
+
+  return { ...graded, created: wasCreated };
+}
+
+/**
+ * Regrade every submitted session that is missing a test_results row.
+ * Returns counts: created (new rows), fixed (updated existing), unchanged (skipped).
+ */
+export async function regradeAllResults(): Promise<{
+  created: number;
+  fixed: number;
+  unchanged: number;
+  results: GradedResult[];
+}> {
+  const { data: sessions } = await supabaseAdmin
+    .from('test_sessions')
+    .select('id, submitted_at')
+    .not('submitted_at', 'is', null)
+    .order('submitted_at', { ascending: false });
+
+  if (!sessions) return { created: 0, fixed: 0, unchanged: 0, results: [] };
+
+  let createdCount = 0;
+  let fixedCount = 0;
+  let unchangedCount = 0;
+    const results: GradedResult[] = [];
+
+  for (const s of sessions as any[]) {
+    // Check if a result already exists.
+    const { data: existing } = await supabaseAdmin
+      .from('test_results')
+      .select('id')
+      .eq('session_id', s.id)
+      .maybeSingle();
+
+    try {
+      const graded = await regradeSession(s.id);
+      if (!graded) {
+        unchangedCount += 1;
+        continue;
+      }
+      if (existing) {
+        fixedCount += 1;
+      } else {
+        createdCount += 1;
+      }
+      results.push(graded);
+    } catch {
+      unchangedCount += 1;
+    }
+  }
+
+  return { created: createdCount, fixed: fixedCount, unchanged: unchangedCount, results };
+}
+
+/**
+ * Shared abandon check used by finalizeExpiredSessions, the dashboard,
+ * the start route, the session-load route and the admin monitor.
+ *
+ * If a session is unsubmitted and now minus coalesce(last_heartbeat_at, started_at)
+ * exceeds the course's abandon_after_minutes threshold, mark it
+ * submit_type = 'abandoned' with submitted_at = now and NO test_results row.
+ * Returns true if the session was abandoned.
+ */
+export async function checkAndFinalizeAbandoned(session: any): Promise<boolean> {
+  const course = await supabaseAdmin
+    .from('courses')
+    .select('abandon_after_minutes')
+    .eq('id', session.course_id)
+    .maybeSingle();
+
+  const abandonAfterMinutes = (course.data as any)?.abandon_after_minutes ?? 60;
+  if (abandonAfterMinutes <= 0) return false; // 0 disables
+
+  const now = new Date();
+  const lastHb = session.last_heartbeat_at
+    ? new Date(session.last_heartbeat_at).getTime()
+    : null;
+  const startedAt = session.started_at
+    ? new Date(session.started_at).getTime()
+    : null;
+  const referenceMs = lastHb ?? startedAt ?? now.getTime();
+
+  const inactiveMinutes = (now.getTime() - referenceMs) / 60000;
+  if (inactiveMinutes > abandonAfterMinutes) {
+    const submittedAt = now.toISOString();
+    await supabaseAdmin
+      .from('test_sessions')
+      .update({
+        submitted_at: submittedAt,
+        submit_type: 'abandoned',
+      })
+      .eq('id', session.id);
+    return true;
+  }
+  return false;
 }
 
 /**
  * Find sessions that have expired or been abandoned and are not yet submitted.
  * For each session, the abandon rule is checked FIRST (before normal expiry).
  * If abandoned: mark submit_type = 'abandoned', submitted_at = now, NO result row.
- * If expired (not abandoned): grade and write test_results. Idempotent.
+ * If expired (not abandoned): grade and write test_results via upsert. Idempotent.
  */
 export async function finalizeExpiredSessions(): Promise<{
   expired: number;
@@ -221,44 +326,44 @@ export async function finalizeExpiredSessions(): Promise<{
 
     expiredCount += 1;
 
-    // Check if a result already exists (idempotency guard).
-    const { data: existing } = await supabaseAdmin
-      .from('test_results')
-      .select('id')
-      .eq('session_id', s.id)
-      .maybeSingle();
-    if (existing) continue;
-
     const graded = await gradeSession(s.id);
     if (!graded) continue;
 
     const submitType = 'auto_timeout';
     const submittedAt = new Date(s.ends_at).toISOString();
 
-    // Mark session submitted.
+    // Upsert result first (idempotent).
+    const { error: resultErr } = await supabaseAdmin
+      .from('test_results')
+      .upsert(
+        {
+          session_id: s.id,
+          student_id: s.student_id,
+          course_id: s.course_id,
+          score: graded.score,
+          total_questions: graded.totalQuestions,
+          percentage: graded.percentage,
+          passed: graded.passed,
+          time_taken_seconds: graded.timeTakenSeconds,
+          submit_type: submitType,
+          paused_seconds: graded.pausedSeconds,
+          disconnect_count: graded.disconnectCount,
+        },
+        { onConflict: 'session_id' },
+      );
+
+    if (resultErr) {
+      console.error('[finalizeExpiredSessions] result insert failed:', resultErr);
+      continue; // don't mark session submitted if result failed
+    }
+
+    // Mark session submitted only after result is saved.
     await supabaseAdmin
       .from('test_sessions')
       .update({ submitted_at: submittedAt, submit_type: submitType })
       .eq('id', s.id);
 
-    // Write result.
-    const { error } = await supabaseAdmin.from('test_results').insert({
-      session_id: s.id,
-      student_id: s.student_id,
-      course_id: s.course_id,
-      score: graded.score,
-      total_questions: graded.totalQuestions,
-      percentage: graded.percentage,
-      passed: graded.passed,
-      time_taken_seconds: graded.timeTakenSeconds,
-      submit_type: submitType,
-      paused_seconds: graded.pausedSeconds,
-      disconnect_count: graded.disconnectCount,
-    });
-
-    if (!error) {
-      results.push({ ...graded, submitType });
-    }
+    results.push({ ...graded, submitType });
   }
 
   return { expired: expiredCount, abandoned: abandonedCount, graded: results.length, results };

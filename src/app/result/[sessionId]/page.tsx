@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { verifyStudentSession } from '@/lib/auth/verify';
+import { regradeSession } from '@/lib/db/grading';
 import { redirect } from 'next/navigation';
 
 interface ReviewItem {
@@ -9,7 +10,6 @@ interface ReviewItem {
   studentAnswer: string | null;
   correctAnswer: string;
   isCorrect: boolean;
-  // displayLabels: the letter shown to the student for each position (shuffled)
   displayLabels: Record<'A' | 'B' | 'C' | 'D', string>;
 }
 
@@ -41,12 +41,59 @@ export default async function ResultPage({
   const showResult = course.show_result_to_student !== false;
   const showReview = course.show_review_to_student !== false;
 
-  // Fetch result.
-  const { data: result } = await supabaseAdmin
+  // If session is not submitted, redirect to test or dashboard.
+  if (!s.submitted_at) {
+    redirect(`/test/${sessionId}`);
+  }
+
+  // Fetch result. If missing but session is submitted, grade on the spot.
+  let { data: result, error: resultErr } = await supabaseAdmin
     .from('test_results')
     .select('*')
     .eq('session_id', sessionId)
     .maybeSingle();
+
+  if (!result) {
+    try {
+      const regraded = await regradeSession(sessionId);
+      if (regraded) {
+        result = {
+          id: '',
+          session_id: sessionId,
+          student_id: regraded.studentId,
+          course_id: regraded.courseId,
+          score: regraded.score,
+          total_questions: regraded.totalQuestions,
+          percentage: regraded.percentage,
+          passed: regraded.passed,
+          time_taken_seconds: regraded.timeTakenSeconds,
+          submit_type: regraded.submitType,
+          paused_seconds: regraded.pausedSeconds,
+          disconnect_count: regraded.disconnectCount,
+          graded_at: new Date().toISOString(),
+        };
+      }
+    } catch (err: any) {
+      resultErr = err;
+    }
+  }
+
+  if (resultErr) {
+    return (
+      <div className="max-w-md mx-auto p-6 text-center">
+        <h2 className="text-xl font-bold text-slate-900 mb-2">Could not load result</h2>
+        <p className="text-slate-600 mb-4">{resultErr?.message || 'Unknown error'}</p>
+        <button
+          onClick={() => {
+            // Client-side retry via router would need 'use client'; use a link instead.
+          }}
+          className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
+        >
+          <a href={`/result/${sessionId}`} className="text-white">Retry</a>
+        </button>
+      </div>
+    );
+  }
 
   // Build answers map: question_id -> original letter.
   const answers: Record<string, string> = {};
@@ -76,7 +123,6 @@ export default async function ResultPage({
         C: q.option_c,
         D: q.option_d,
       };
-      // displayLabels: position -> original letter
       const displayLabels: Record<'A' | 'B' | 'C' | 'D', string> = {
         A: shuffled[0],
         B: shuffled[1],
@@ -149,23 +195,23 @@ export default async function ResultPage({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-slate-600 mb-6">
             <div className="p-3 rounded bg-slate-50 border border-slate-200">
               <div className="text-xs font-semibold text-slate-500 uppercase">Score</div>
-              <div className="text-lg font-bold">{result?.score} / {result?.total_questions}</div>
+              <div className="text-lg font-bold">{result.score} / {result.total_questions}</div>
             </div>
             <div className="p-3 rounded bg-slate-50 border border-slate-200">
               <div className="text-xs font-semibold text-slate-500 uppercase">Submit type</div>
               <div className="text-lg font-bold capitalize">
-                {result?.submit_type?.replace('_', ' ')}
+                {result.submit_type?.replace('_', ' ')}
               </div>
             </div>
             <div className="p-3 rounded bg-slate-50 border border-slate-200">
               <div className="text-xs font-semibold text-slate-500 uppercase">Time taken</div>
               <div className="text-lg font-bold">
-                {result?.time_taken_seconds != null
+                {result.time_taken_seconds != null
                   ? `${Math.floor(result.time_taken_seconds / 60)}m ${result.time_taken_seconds % 60}s`
                   : '—'}
               </div>
             </div>
-            {result?.paused_seconds != null && result.paused_seconds > 0 && (
+            {result.paused_seconds != null && result.paused_seconds > 0 && (
               <div className="p-3 rounded bg-slate-50 border border-slate-200">
                 <div className="text-xs font-semibold text-slate-500 uppercase">Paused time</div>
                 <div className="text-lg font-bold">
@@ -173,7 +219,7 @@ export default async function ResultPage({
                 </div>
               </div>
             )}
-            {result?.disconnect_count != null && result.disconnect_count > 0 && (
+            {result.disconnect_count != null && result.disconnect_count > 0 && (
               <div className="p-3 rounded bg-slate-50 border border-slate-200">
                 <div className="text-xs font-semibold text-slate-500 uppercase">Disconnects</div>
                 <div className="text-lg font-bold">{result.disconnect_count}</div>

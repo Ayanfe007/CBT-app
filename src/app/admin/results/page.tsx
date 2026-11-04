@@ -9,6 +9,8 @@ export default function ResultsPage() {
   const [students, setStudents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [regrading, setRegrading] = useState(false);
+  const [regradeMsg, setRegradeMsg] = useState('');
 
   const [filterCourse, setFilterCourse] = useState('');
   const [filterStudent, setFilterStudent] = useState('');
@@ -28,6 +30,29 @@ export default function ResultsPage() {
     setResults(json.results ?? []);
     setSummary(json.summary ?? {});
   }, [filterCourse, filterStudent, filterFrom, filterTo, search]);
+
+  const handleRegrade = useCallback(async () => {
+    setRegrading(true);
+    setRegradeMsg('');
+    try {
+      const res = await fetch('/api/admin/results/regrade', {
+        method: 'POST',
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setRegradeMsg(json.error || 'Regrade failed.');
+        return;
+      }
+      setRegradeMsg(
+        `Regrade complete: ${json.created} created, ${json.fixed} fixed, ${json.unchanged} unchanged.`
+      );
+      await fetchData();
+    } catch (err: any) {
+      setRegradeMsg(err.message || 'Regrade failed.');
+    } finally {
+      setRegrading(false);
+    }
+  }, [fetchData]);
 
   useEffect(() => {
     Promise.all([
@@ -55,13 +80,36 @@ export default function ResultsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-slate-900">Results & Live Monitor</h1>
-        <a
-          href={csvUrl()}
-          className="px-4 py-2 rounded-md border border-slate-300 text-slate-700 text-sm hover:bg-slate-100"
-        >
-          Export CSV
-        </a>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleRegrade}
+            disabled={regrading}
+            className="px-4 py-2 rounded-md border border-slate-300 text-slate-700 text-sm hover:bg-slate-100 disabled:opacity-60"
+          >
+            {regrading ? 'Regrading…' : 'Regrade All Results'}
+          </button>
+          <a
+            href={csvUrl()}
+            className="px-4 py-2 rounded-md border border-slate-300 text-slate-700 text-sm hover:bg-slate-100"
+          >
+            Export CSV
+          </a>
+        </div>
       </div>
+
+      {regradeMsg && (
+        <div className={`p-3 rounded text-sm border ${
+          regradeMsg.startsWith('Regrade complete')
+            ? 'bg-green-50 text-green-700 border-green-100'
+            : 'bg-red-50 text-red-700 border-red-100'
+        }`}>
+          {regradeMsg}
+        </div>
+      )}
+
+      {error && (
+        <div className="p-3 rounded text-sm text-red-700 bg-red-50 border border-red-100">{error}</div>
+      )}
 
       {error && (
         <div className="p-3 rounded text-sm text-red-700 bg-red-50 border border-red-100">{error}</div>
