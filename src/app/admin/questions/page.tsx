@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import Modal from '@/components/Modal';
+import { Toast } from '@/components/Toast';
 
 interface Course { id: string; course_code: string; title: string; }
 interface Question {
@@ -21,6 +22,12 @@ export default function QuestionsPage() {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const showToast = useCallback((type: 'success' | 'error', message: string) => {
+    setToast({ type, message });
+    setTimeout(() => setToast(null), 4000);
+  }, []);
   const [showParser, setShowParser] = useState(false);
   const [parserText, setParserText] = useState('');
   const [parseValid, setParseValid] = useState<any[]>([]);
@@ -48,7 +55,12 @@ export default function QuestionsPage() {
   async function deleteQuestion(id: string) {
     if (!window.confirm('Delete this question?')) return;
     const res = await fetch(`/api/admin/questions/${id}`, { method: 'DELETE' });
-    if (res.ok) loadQuestions();
+    if (res.ok) {
+      loadQuestions();
+      showToast('success', 'Question deleted.');
+    } else {
+      showToast('error', 'Delete failed.');
+    }
   }
 
   async function handleParse() {
@@ -86,6 +98,7 @@ export default function QuestionsPage() {
     setParserText('');
     setShowParser(false);
     loadQuestions();
+    showToast('success', `Saved ${parseValid.length} question(s).`);
   }
 
   return (
@@ -100,6 +113,13 @@ export default function QuestionsPage() {
         </button>
       </div>
 
+      <Toast />
+      {toast && (
+        <div className={`p-3 rounded text-sm font-medium flex items-start gap-3 ${toast.type === 'success' ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-red-100 text-red-800 border border-red-200'}`}>
+          <span>{toast.type === 'success' ? '✓' : '✕'}</span>
+          <span>{toast.message}</span>
+        </div>
+      )}
       {error && (
         <div className="p-3 rounded text-sm text-red-700 bg-red-50 border border-red-100">{error}</div>
       )}

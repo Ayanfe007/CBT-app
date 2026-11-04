@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import Modal from '@/components/Modal';
+import { Toast } from '@/components/Toast';
 
 interface Course {
   id: string;
@@ -22,6 +23,12 @@ export default function CoursesPage() {
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const showToast = useCallback((type: 'success' | 'error', message: string) => {
+    setToast({ type, message });
+    setTimeout(() => setToast(null), 4000);
+  }, []);
   const [openForm, setOpenForm] = useState(false);
   const [editing, setEditing] = useState<Course | null>(null);
   const [form, setForm] = useState<{
@@ -81,18 +88,25 @@ export default function CoursesPage() {
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
       setError(j.error || 'Save failed.');
+      showToast('error', j.error || 'Save failed.');
       return;
     }
     setOpenForm(false);
     setEditing(null);
     setError('');
     load();
+    showToast('success', editing ? 'Course updated.' : 'Course created.');
   }
 
   async function deleteCourse(id: string) {
     if (!window.confirm('Delete this course and all its questions/results?')) return;
     const res = await fetch(`/api/admin/courses/${id}`, { method: 'DELETE' });
-    if (res.ok) load();
+    if (res.ok) {
+      load();
+      showToast('success', 'Course deleted.');
+    } else {
+      showToast('error', 'Delete failed.');
+    }
   }
 
   return (
@@ -116,6 +130,13 @@ export default function CoursesPage() {
         </button>
       </div>
 
+      <Toast />
+      {toast && (
+        <div className={`p-3 rounded text-sm font-medium flex items-start gap-3 ${toast.type === 'success' ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-red-100 text-red-800 border border-red-200'}`}>
+          <span>{toast.type === 'success' ? '✓' : '✕'}</span>
+          <span>{toast.message}</span>
+        </div>
+      )}
       {error && (
         <div className="p-3 rounded text-sm text-red-700 bg-red-50 border border-red-100">{error}</div>
       )}
