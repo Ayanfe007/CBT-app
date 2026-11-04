@@ -19,6 +19,79 @@ export interface GradedResult {
 }
 
 /**
+ * Pure: minutes of inactivity for a session.
+ * reference = last_heartbeat_at ?? started_at ?? now.
+ */
+export function computeInactiveMinutes(
+  session: { last_heartbeat_at: string | null; started_at: string | null },
+  nowMs: number,
+): number {
+  const lastHb = session.last_heartbeat_at
+    ? new Date(session.last_heartbeat_at).getTime()
+    : null;
+  const startedAt = session.started_at
+    ? new Date(session.started_at).getTime()
+    : null;
+  const referenceMs = lastHb ?? startedAt ?? nowMs;
+  return Math.max(0, (nowMs - referenceMs) / 60000);
+}
+
+/**
+ * Pure: should a session be abandoned given inactivity and course threshold?
+ */
+export function shouldAbandon(
+  session: { last_heartbeat_at: string | null; started_at: string | null },
+  abandonAfterMinutes: number,
+  nowMs: number,
+): boolean {
+  if (abandonAfterMinutes <= 0) return false;
+  return computeInactiveMinutes(session, nowMs) > abandonAfterMinutes;
+}
+
+/**
+ * Shared abandon check used by finalizeExpiredSessions, the dashboard,
+ * the start route, the session-load route and the admin monitor.
+ *
+ * If a session is unsubmitted and now minus coalesce(last_heartbeat_at, started_at)
+ * exceeds the course's abandon_after_minutes threshold, mark it
+ * submit_type = 'abandoned' with submitted_at = now and NO test_results row.
+ * Returns true if the session was abandoned.
+ */
+export async function checkAndFinalizeAbandoned(session: any): Promise<boolean> {
+  const course = await supabaseAdmin
+    .from('courses')
+    .select('abandon_after_minutes')
+    .eq('id', session.course_id)
+    .maybeSingle();
+
+  const abandonAfterMinutes = (course.data as any)?.abandon_after_minutes ?? 60;
+  if (abandonAfterMinutes <= 0) return false; // 0 disables
+
+  const now = new Date();
+  const lastHb = session.last_heartbeat_at
+    ? new Date(session.last_heartbeat_at).getTime()
+    : null;
+  const startedAt = session.started_at
+    ? new Date(session.started_at).getTime()
+    : null;
+  const referenceMs = lastHb ?? startedAt ?? now.getTime();
+
+  const inactiveMinutes = (now.getTime() - referenceMs) / 60000;
+  if (inactiveMinutes > abandonAfterMinutes) {
+    const submittedAt = now.toISOString();
+    await supabaseAdmin
+      .from('test_sessions')
+      .update({
+        submitted_at: submittedAt,
+        submit_type: 'abandoned',
+      })
+      .eq('id', session.id);
+    return true;
+  }
+  return false;
+}
+
+/**
  * Grade a session from its saved answers.
  * Compares each submitted original option letter against the question's
  * correct_option. time_taken_seconds excludes paused time.
@@ -85,17 +158,14 @@ export async function gradeSession(sessionId: string): Promise<GradedResult | nu
 }
 
 /**
- * Find sessions that have expired and are not yet submitted, grade them,
- * and write test_results. Idempotent: test_results.session_id is unique so
- * re-running never creates duplicates.
- *
- * A session counts as expired when now > effectiveEnd, where
- * effectiveEnd = ends_at + remainingAllowanceSeconds and
- * remainingAllowanceSeconds = max_pause_minutes*60 - paused_seconds.
- * Equivalently: started_at + duration_minutes + max_pause_minutes.
+ * Find sessions that have expired or been abandoned and are not yet submitted.
+ * For each session, the abandon rule is checked FIRST (before normal expiry).
+ * If abandoned: mark submit_type = 'abandoned', submitted_at = now, NO result row.
+ * If expired (not abandoned): grade and write test_results. Idempotent.
  */
 export async function finalizeExpiredSessions(): Promise<{
   expired: number;
+  abandoned: number;
   graded: number;
   results: GradedResult[];
 }> {
@@ -104,29 +174,53 @@ export async function finalizeExpiredSessions(): Promise<{
   // Fetch all in-progress sessions with their courses.
   const { data: sessions } = await supabaseAdmin
     .from('test_sessions')
-    .select('*, courses(max_pause_minutes, duration_minutes, pass_mark_percent)')
+    .select('*, courses(max_pause_minutes, duration_minutes, pass_mark_percent, abandon_after_minutes)')
     .is('submitted_at', null)
     .order('starts_at', { ascending: true });
 
-  if (!sessions) return { expired: 0, graded: 0, results: [] };
+  if (!sessions) return { expired: 0, abandoned: 0, graded: 0, results: [] };
 
-  const expired: any[] = [];
+  let abandonedCount = 0;
+  let expiredCount = 0;
   const results: GradedResult[] = [];
 
   for (const s of sessions as any[]) {
     const course = s.courses as any;
+
+    // 1. Abandon rule checked FIRST.
+    const abandonAfterMinutes = course?.abandon_after_minutes ?? 60;
+    if (abandonAfterMinutes > 0) {
+      const lastHb = s.last_heartbeat_at
+        ? new Date(s.last_heartbeat_at).getTime()
+        : null;
+      const startedAt = s.started_at
+        ? new Date(s.started_at).getTime()
+        : null;
+      const referenceMs = lastHb ?? startedAt ?? now.getTime();
+      const inactiveMinutes = (now.getTime() - referenceMs) / 60000;
+
+      if (inactiveMinutes > abandonAfterMinutes) {
+        const submittedAt = now.toISOString();
+        await supabaseAdmin
+          .from('test_sessions')
+          .update({ submitted_at: submittedAt, submit_type: 'abandoned' })
+          .eq('id', s.id);
+        abandonedCount += 1;
+        continue; // skip normal expiry grading for abandoned sessions
+      }
+    }
+
+    // 2. Normal expiry check.
     const maxPauseSeconds = (course?.max_pause_minutes ?? 20) * 60;
     const pausedSeconds = s.paused_seconds ?? 0;
     const remainingAllowance = Math.max(0, maxPauseSeconds - pausedSeconds);
     const endsAt = new Date(s.ends_at).getTime();
     const effectiveEnd = endsAt + remainingAllowance * 1000;
 
-    if (now.getTime() > effectiveEnd) {
-      expired.push(s);
-    }
-  }
+    if (now.getTime() <= effectiveEnd) continue; // not expired yet
 
-  for (const s of expired) {
+    expiredCount += 1;
+
     // Check if a result already exists (idempotency guard).
     const { data: existing } = await supabaseAdmin
       .from('test_results')
@@ -163,12 +257,9 @@ export async function finalizeExpiredSessions(): Promise<{
     });
 
     if (!error) {
-      results.push({
-        ...graded,
-        submitType,
-      });
+      results.push({ ...graded, submitType });
     }
   }
 
-  return { expired: expired.length, graded: results.length, results };
+  return { expired: expiredCount, abandoned: abandonedCount, graded: results.length, results };
 }

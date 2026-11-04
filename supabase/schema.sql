@@ -36,6 +36,7 @@ create table if not exists courses (
   show_result_to_student boolean default true,
   show_review_to_student boolean default true,
   max_pause_minutes int not null default 20,
+  abandon_after_minutes int not null default 60,
   created_at timestamptz default now()
 );
 

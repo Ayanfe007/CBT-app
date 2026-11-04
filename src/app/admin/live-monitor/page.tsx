@@ -5,6 +5,7 @@ import { useEffect, useState, useCallback } from 'react';
 export default function LiveMonitorPage() {
   const [sessions, setSessions] = useState<any[]>([]);
   const [courses, setCourses] = useState<any[]>([]);
+  const [abandonedCount, setAbandonedCount] = useState(0);
   const [filterCourse, setFilterCourse] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -17,6 +18,14 @@ export default function LiveMonitorPage() {
     const json = await res.json();
     setSessions(json.sessions ?? []);
     setLastUpdated(new Date());
+    // Fetch abandoned count from results API.
+    try {
+      const r = await fetch(`/api/admin/results?${params}`, { headers: { 'Cache-Control': 'no-store' } });
+      const j = await r.json();
+      setAbandonedCount(j.summary?.abandonedCount ?? 0);
+    } catch {
+      // ignore
+    }
   }, [filterCourse]);
 
   useEffect(() => {
@@ -62,7 +71,7 @@ export default function LiveMonitorPage() {
         <div className="p-3 rounded text-sm text-red-700 bg-red-50 border border-red-100">{error}</div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
         <div className="bg-white p-4 rounded-lg border border-slate-200">
           <div className="text-xs font-semibold text-slate-500 uppercase">In progress</div>
           <div className="text-2xl font-bold text-slate-900">{sessions.length}</div>
@@ -78,6 +87,10 @@ export default function LiveMonitorPage() {
           <div className="text-2xl font-bold text-slate-900">
             {sessions.filter((s) => s.status === 'paused').length}
           </div>
+        </div>
+        <div className="bg-white p-4 rounded-lg border border-slate-200">
+          <div className="text-xs font-semibold text-slate-500 uppercase">Abandoned (inactive)</div>
+          <div className="text-2xl font-bold text-amber-700">{abandonedCount}</div>
         </div>
       </div>
 

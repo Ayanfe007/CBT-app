@@ -134,6 +134,7 @@ export default function ResultsPage() {
           { label: 'Highest', value: String(summary.highest ?? 0) + '%' },
           { label: 'Lowest', value: String(summary.lowest ?? 0) + '%' },
           { label: 'Pass rate', value: String(summary.passRate ?? 0) + '%' },
+          { label: 'Abandoned', value: String(summary.abandonedCount ?? 0) },
         ].map((item) => (
           <div key={item.label} className="bg-white p-4 rounded-lg border border-slate-200">
             <div className="text-xs font-semibold text-slate-500 uppercase">{item.label}</div>
@@ -170,33 +171,55 @@ export default function ResultsPage() {
                   <tr key={r.id} className="bg-white">
                     <td className="p-3 border border-slate-200">{r.students?.full_name}</td>
                     <td className="p-3 border border-slate-200 font-mono text-xs">{r.courses?.course_code}</td>
-                    <td className="p-3 border border-slate-200 text-right">{r.score} / {r.total_questions}</td>
-                    <td className="p-3 border border-slate-200 text-right font-mono">{Number(r.percentage).toFixed(2)}%</td>
-                    <td className="p-3 border border-slate-200 text-center">
-                      <span
-                        className={`px-2 py-0.5 rounded text-xs font-medium ${
-                          r.passed ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                        }`}
-                      >
-                        {r.passed ? 'Pass' : 'Fail'}
-                      </span>
-                    </td>
-                    <td className="p-3 border border-slate-200 text-sm capitalize">{r.submit_type?.replace('_', ' ')}</td>
-                    <td className="p-3 border border-slate-200 text-sm font-mono">
-                      {r.time_taken_seconds != null ? `${Math.floor(r.time_taken_seconds / 60)}m ${r.time_taken_seconds % 60}s` : '—'}
-                    </td>
-                    <td className="p-3 border border-slate-200 text-center font-mono text-xs">{sess?.paused_seconds ?? '—'}</td>
-                    <td className="p-3 border border-slate-200 text-center font-mono text-xs">{sess?.disconnect_count ?? '—'}</td>
-                    <td className="p-3 border border-slate-200 text-center font-mono text-xs">{sess?.tab_switch_count ?? '—'}</td>
-                    <td className="p-3 border border-slate-200 text-sm">{new Date(r.graded_at).toLocaleString()}</td>
-                    <td className="p-3 border border-slate-200">
-                      <a
-                        href={`/admin/results/${r.id}/breakdown`}
-                        className="text-xs text-blue-600 hover:underline"
-                      >
-                        Breakdown
-                      </a>
-                    </td>
+                    {r._abandoned ? (
+                      <>
+                        <td className="p-3 border border-slate-200 text-right text-slate-400">— / —</td>
+                        <td className="p-3 border border-slate-200 text-right font-mono text-slate-400">—%</td>
+                        <td className="p-3 border border-slate-200 text-center">
+                          <span className="px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-600">
+                            —
+                          </span>
+                        </td>
+                        <td className="p-3 border border-slate-200 text-sm">
+                          <span className="px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">
+                            Abandoned
+                          </span>
+                        </td>
+                        <td className="p-3 border border-slate-200 text-sm font-mono text-slate-400">—</td>
+                        <td className="p-3 border border-slate-200 text-center font-mono text-xs">{sess?.paused_seconds ?? '—'}</td>
+                        <td className="p-3 border border-slate-200 text-center font-mono text-xs">{sess?.disconnect_count ?? '—'}</td>
+                        <td className="p-3 border border-slate-200 text-center font-mono text-xs">—</td>
+                        <td className="p-3 border border-slate-200 text-sm">{new Date(r.graded_at).toLocaleString()}</td>
+                        <td className="p-3 border border-slate-200">
+                          <span className="text-xs text-slate-400">—</span>
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="p-3 border border-slate-200 text-right">{r.score} / {r.total_questions}</td>
+                        <td className="p-3 border border-slate-200 text-right font-mono">{Number(r.percentage).toFixed(2)}%</td>
+                        <td className="p-3 border border-slate-200 text-center">
+                          <span
+                            className={`px-2 py-0.5 rounded text-xs font-medium ${r.passed ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}
+                          >
+                            {r.passed ? 'Pass' : 'Fail'}
+                          </span>
+                        </td>
+                        <td className="p-3 border border-slate-200 text-sm capitalize">{r.submit_type?.replace('_', ' ')}</td>
+                        <td className="p-3 border border-slate-200 text-sm font-mono">
+                          {r.time_taken_seconds != null ? `${Math.floor(r.time_taken_seconds / 60)}m ${r.time_taken_seconds % 60}s` : '—'}
+                        </td>
+                        <td className="p-3 border border-slate-200 text-center font-mono text-xs">{sess?.paused_seconds ?? '—'}</td>
+                        <td className="p-3 border border-slate-200 text-center font-mono text-xs">{sess?.disconnect_count ?? '—'}</td>
+                        <td className="p-3 border border-slate-200 text-center font-mono text-xs">{sess?.tab_switch_count ?? '—'}</td>
+                        <td className="p-3 border border-slate-200 text-sm">{new Date(r.graded_at).toLocaleString()}</td>
+                        <td className="p-3 border border-slate-200">
+                          <a href={`/admin/results/${r.id}/breakdown`} className="text-xs text-blue-600 hover:underline">
+                            Breakdown
+                          </a>
+                        </td>
+                      </>
+                    )}
                   </tr>
                 );
               })}

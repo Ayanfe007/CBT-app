@@ -12,6 +12,7 @@ interface Course {
   pass_mark_percent: number;
   max_attempts: number;
   max_pause_minutes: number;
+  abandon_after_minutes: number;
   is_active: boolean;
   show_result_to_student: boolean;
   show_review_to_student: boolean;
@@ -34,6 +35,7 @@ export default function CoursesPage() {
     show_result_to_student: boolean;
     show_review_to_student: boolean;
     max_pause_minutes: string;
+    abandon_after_minutes: string;
   }>({
     course_code: '',
     title: '',
@@ -45,6 +47,7 @@ export default function CoursesPage() {
     show_result_to_student: true,
     show_review_to_student: true,
     max_pause_minutes: '20',
+    abandon_after_minutes: '60',
   });
 
   const load = useCallback(async () => {
@@ -64,6 +67,7 @@ export default function CoursesPage() {
       pass_mark_percent: Number(form.pass_mark_percent),
       max_attempts: Number(form.max_attempts),
       max_pause_minutes: Number(form.max_pause_minutes),
+      abandon_after_minutes: Number(form.abandon_after_minutes),
       questions_per_test:
         form.questions_per_test === '' ? null : Number(form.questions_per_test),
     };
@@ -102,6 +106,7 @@ export default function CoursesPage() {
               course_code: '', title: '', duration_minutes: '30', questions_per_test: '',
               pass_mark_percent: '50', max_attempts: '1', is_active: true,
               show_result_to_student: true, show_review_to_student: true, max_pause_minutes: '20',
+              abandon_after_minutes: '60',
             });
             setOpenForm(true);
           }}
@@ -126,6 +131,7 @@ export default function CoursesPage() {
               <th className="p-3 border border-slate-200">Pass Mark</th>
               <th className="p-3 border border-slate-200">Max Attempts</th>
               <th className="p-3 border border-slate-200">Max Pause (min)</th>
+              <th className="p-3 border border-slate-200">Inactive Reset (min)</th>
               <th className="p-3 border border-slate-200">Status</th>
               <th className="p-3 border border-slate-200">Actions</th>
             </tr>
@@ -140,6 +146,7 @@ export default function CoursesPage() {
                 <td className="p-3 border border-slate-200">{c.pass_mark_percent}%</td>
                 <td className="p-3 border border-slate-200">{c.max_attempts}</td>
                 <td className="p-3 border border-slate-200">{c.max_pause_minutes}</td>
+                <td className="p-3 border border-slate-200">{c.abandon_after_minutes}</td>
                 <td className="p-3 border border-slate-200">
                   <span className={`px-2 py-0.5 rounded text-xs font-medium ${c.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                     {c.is_active ? 'Open' : 'Closed'}
@@ -157,6 +164,7 @@ export default function CoursesPage() {
                         is_active: c.is_active, show_result_to_student: c.show_result_to_student,
                         show_review_to_student: c.show_review_to_student,
                         max_pause_minutes: String(c.max_pause_minutes),
+                        abandon_after_minutes: String(c.abandon_after_minutes),
                       });
                       setOpenForm(true);
                     }}
@@ -247,6 +255,16 @@ export default function CoursesPage() {
               onChange={(e) => setForm({ ...form, max_pause_minutes: e.target.value })}
             />
             <p className="text-xs text-slate-500 mt-1">0 disables pausing. Timer pauses when connection is lost.</p>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Inactive reset (minutes)</label>
+            <input
+              type="number"
+              className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+              value={form.abandon_after_minutes}
+              onChange={(e) => setForm({ ...form, abandon_after_minutes: e.target.value })}
+            />
+            <p className="text-xs text-slate-500 mt-1">Minutes of inactivity before an unsubmitted attempt is auto-abandoned. 0 disables.</p>
           </div>
           <div className="flex items-start gap-3 mt-2">
             <input

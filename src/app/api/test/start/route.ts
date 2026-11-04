@@ -4,6 +4,7 @@ import { verifyStudentSession } from '@/lib/auth/verify';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { createSession } from '@/lib/db/sessions';
 import { shuffle, shuffleOptions } from '@/lib/shuffle';
+import { finalizeExpiredSessions } from '@/lib/db/grading';
 
 const schema = z.object({ courseId: z.string().uuid() });
 
@@ -61,13 +62,23 @@ export async function POST(req: Request) {
 
     const maxAttempts = assignment.attempts_override ?? course.max_attempts;
 
+    // Finalize any expired/abandoned sessions before counting attempts.
+    try {
+      await finalizeExpiredSessions();
+    } catch {
+      // best-effort
+    }
+
     const { data: sessions } = await supabaseAdmin
       .from('test_sessions')
-      .select('id, submitted_at, question_order, option_orders, ends_at')
+      .select('id, submitted_at, submit_type, question_order, option_orders, ends_at')
       .eq('student_id', studentId)
       .eq('course_id', courseId);
 
-    const completedCount = (sessions ?? []).filter((s) => s.submitted_at).length;
+    // Completed attempts exclude abandoned sessions (they don't consume an attempt).
+    const completedCount = (sessions ?? []).filter(
+      (s) => s.submitted_at && s.submit_type !== 'abandoned'
+    ).length;
     if (completedCount >= maxAttempts) {
       return NextResponse.json(
         { error: 'Maximum attempts reached for this course.' },
@@ -75,7 +86,10 @@ export async function POST(req: Request) {
       );
     }
 
-    const inProgress = (sessions ?? []).find((s) => !s.submitted_at);
+    // Resume an in-progress (non-abandoned, unsubmitted) session.
+    const inProgress = (sessions ?? []).find(
+      (s) => !s.submitted_at && s.submit_type !== 'abandoned'
+    );
     if (inProgress) {
       const { data: questions } = await supabaseAdmin
         .from('questions')

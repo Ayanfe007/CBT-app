@@ -25,6 +25,8 @@ export interface TestSession {
   last_client_seq: number;
 }
 
+export type SubmitType = 'manual' | 'auto_timeout' | 'admin_forced' | 'abandoned';
+
 export async function createSession(input: {
   studentId: string;
   courseId: string;
@@ -95,6 +97,7 @@ export async function saveAnswers(input: {
     .update({
       answers: existing,
       last_client_seq: maxSeq,
+      last_heartbeat_at: new Date().toISOString(),
     })
     .eq('id', input.sessionId);
 
@@ -175,7 +178,7 @@ export async function heartbeat(input: {
 
 export async function markSubmitted(input: {
   sessionId: string;
-  submitType: 'manual' | 'admin_forced';
+  submitType: SubmitType;
   submittedAt: string;
   answers: Record<string, string>;
 }) {
@@ -218,4 +221,14 @@ export async function resetAttempt(sessionId: string) {
   await supabaseAdmin.from('test_results').delete().eq('session_id', sessionId);
   const { error } = await supabaseAdmin.from('test_sessions').delete().eq('id', sessionId);
   if (error) throw error;
+}
+
+export async function markAbandoned(sessionId: string) {
+  const submittedAt = new Date().toISOString();
+  const { error } = await supabaseAdmin
+    .from('test_sessions')
+    .update({ submitted_at: submittedAt, submit_type: 'abandoned' })
+    .eq('id', sessionId);
+  if (error) throw error;
+  return { submittedAt, submitType: 'abandoned' };
 }

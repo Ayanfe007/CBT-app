@@ -24,20 +24,24 @@ interface Question {
 }
 
 interface SessionResponse {
+  status: 'active' | 'finished';
   sessionId: string;
-  endsAt: string;
-  serverNow: string;
+  endsAt: string | null;
+  serverNow: string | null;
   questions: Question[];
   questionOrder: string[];
   optionOrders: Record<string, string[]>;
   submittedAt: string | null;
   answers: Record<string, string>;
   pausedSeconds: number;
+  resultId?: string | null;
+  submitType?: string | null;
 }
 
 type TestStatus =
   | 'loading'
   | 'load-failed'
+  | 'finished'
   | 'active'
   | 'paused'
   | 'submitting'
@@ -46,6 +50,7 @@ type TestStatus =
 const HEARTBEAT_MS = 15_000;
 const AUTOSAVE_DEBOUNCE_MS = 2_000;
 const REQUEST_TIMEOUT_MS = 15_000;
+const SUBMIT_TIMEOUT_MS = 60_000;
 
 export default function TestPage() {
   const { sessionId: rawSessionId } = useParams();
@@ -63,15 +68,16 @@ export default function TestPage() {
   const [pausedSeconds, setPausedSeconds] = useState(0);
   const [submitMessage, setSubmitMessage] = useState('');
   const [submitError, setSubmitError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const serverEndsAtRef = useRef<string>('');
+  const serverEndsAtRef = useRef<string | null>(null);
   const offsetRef = useRef(0);
-  const lastSyncLocalRef = useRef(0);
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let tickTimer: ReturnType<typeof setInterval> | null = null;
   let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingDirty = false;
   let seq = 0;
+  let loaded = false; // first successful load guard
 
   // ---------------- Load session ----------------
   useEffect(() => {
@@ -95,9 +101,7 @@ export default function TestPage() {
       try {
         const res = await fetch(
           `/api/test/session?sessionId=${sessionId}`,
-          {
-            headers: { 'Cache-Control': 'no-store' },
-          }
+          { headers: { 'Cache-Control': 'no-store' } }
         );
         if (!res.ok) {
           if (res.status === 401 || res.status === 403) {
@@ -122,11 +126,10 @@ export default function TestPage() {
           serverEndsAtRef.current = cached.endsAt;
           setStatus('active');
           setIsPaused(true);
-          setSubmitMessage(
-            'Running from cached session. Reconnecting to server…'
-          );
+          setSubmitMessage('Running from cached session. Reconnecting to server…');
           startTick();
           startHeartbeat();
+          loaded = true;
           return;
         }
         setStatus('load-failed');
@@ -142,27 +145,36 @@ export default function TestPage() {
         return;
       }
 
-      if (serverData.submittedAt) {
-        router.replace(`/result/${serverData.sessionId}`);
+      // Finished session (submitted, auto-timed-out, or abandoned).
+      if (serverData.status === 'finished' || serverData.submittedAt) {
+        setStatus('finished');
+        if (serverData.resultId) {
+          router.replace(`/result/${serverData.resultId}`);
+        } else if (serverData.submitType === 'abandoned') {
+          router.push('/dashboard');
+        } else {
+          router.replace(`/result/${serverData.sessionId}`);
+        }
         return;
       }
 
       if (!serverData.questions || serverData.questions.length === 0) {
         setStatus('load-failed');
-        setLoadError(
-          'No questions found for this session. Please contact your admin.'
-        );
+        setLoadError('No questions found for this session. Please contact your admin.');
         return;
       }
 
+      loaded = true;
       setQuestions(serverData.questions);
-      setAnswers(serverData.answers);
-      serverEndsAtRef.current = serverData.endsAt;
+      setAnswers(serverData.answers || {});
+      serverEndsAtRef.current = serverData.endsAt ?? null;
       setPausedSeconds(serverData.pausedSeconds ?? 0);
-      syncTimer(serverData.endsAt, serverData.serverNow);
+      if (serverData.endsAt) {
+        syncTimer(serverData.endsAt, serverData.serverNow ?? '');
+      }
       setStatus('active');
 
-      if (!isOfflineDisabled()) {
+      if (!isOfflineDisabled() && serverData.endsAt) {
         void cacheSession({
           sessionId: serverData.sessionId,
           endsAt: serverData.endsAt,
@@ -209,17 +221,17 @@ export default function TestPage() {
   const syncTimer = useCallback((endsAt: string, serverNow?: string) => {
     serverEndsAtRef.current = endsAt;
     if (serverNow) {
-      offsetRef.current =
-        new Date(serverNow).getTime() - Date.now();
+      offsetRef.current = new Date(serverNow).getTime() - Date.now();
     }
-    lastSyncLocalRef.current = Date.now();
   }, []);
 
   const computeRemaining = useCallback((): number => {
     if (!serverEndsAtRef.current) return 0;
     const ends = new Date(serverEndsAtRef.current).getTime();
+    if (Number.isNaN(ends)) return 0;
     const serverNow = Date.now() + offsetRef.current;
-    return Math.max(0, Math.floor((ends - serverNow) / 1000));
+    const rem = Math.floor((ends - serverNow) / 1000);
+    return Math.max(0, rem);
   }, []);
 
   // ---------------- Heartbeat ----------------
@@ -233,17 +245,13 @@ export default function TestPage() {
       });
       if (!res.ok) return;
       const json = await res.json();
-      offsetRef.current =
-        new Date(json.serverNow).getTime() - Date.now();
-      lastSyncLocalRef.current = Date.now();
-      serverEndsAtRef.current = json.endsAt;
+      offsetRef.current = new Date(json.serverNow).getTime() - Date.now();
+      serverEndsAtRef.current = json.endsAt ?? null;
       setIsPaused(false);
       setSubmitMessage('');
       setPausedSeconds(json.pausedSeconds ?? 0);
       if (json.allowanceExhausted) {
-        setSubmitMessage(
-          'Pause allowance used up — the clock now runs normally.'
-        );
+        setSubmitMessage('Pause allowance used up — the clock now runs normally.');
       }
     } catch {
       // Network failure — handled by offline event
@@ -293,8 +301,7 @@ export default function TestPage() {
     if (pending.length === 0 && !pendingDirty) return;
     pendingDirty = false;
 
-    const latestByQuestion: Record<string, { letter: string; seq: number }> =
-      {};
+    const latestByQuestion: Record<string, { letter: string; seq: number }> = {};
     pending.forEach((p) => {
       const cur = latestByQuestion[p.questionId];
       if (!cur || p.seq > cur.seq)
@@ -324,11 +331,7 @@ export default function TestPage() {
       const res = await fetchWithTimeout('/api/test/answers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId,
-          answers: latestByQuestion,
-          clientSeq: seq,
-        }),
+        body: JSON.stringify({ sessionId, answers: latestByQuestion, clientSeq: seq }),
       });
       if (res.ok) {
         pending.forEach((p) => void removePendingAnswer(p.id));
@@ -366,6 +369,7 @@ export default function TestPage() {
 
   // ---------------- Submit ----------------
   async function autoSubmit() {
+    if (!loaded) return; // never auto-submit before first successful load
     setStatus('submitting');
     setSubmitMessage('Time is up — submitting your test automatically…');
     await finalSubmit('auto_timeout');
@@ -387,102 +391,100 @@ export default function TestPage() {
     await finalSubmit('manual');
   }
 
+  /**
+   * Cancel Test: submit the current answers and return to dashboard.
+   * Students cannot cancel and restart for a fresh shuffle — this submits
+   * whatever they've answered so far.
+   */
   async function handleCancelTest() {
+    if (status === 'submitting' || status === 'submitted') return;
     if (
       !window.confirm(
-        'Cancel this test? Your progress will be lost and you will return to the dashboard.'
+        'Submit your current answers and return to the dashboard? You cannot restart this attempt.'
       )
     )
       return;
     setStatus('submitting');
-    setSubmitMessage('Cancelling test…');
-    try {
-      await fetchWithTimeout('/api/test/submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId,
-          answers: {},
-          clientSeq: seq,
-        }),
-      });
-    } catch {
-      // ignore
-    }
-    stopTick();
-    stopHeartbeat();
+    setSubmitMessage('Submitting your answers…');
+    await finalSubmit('manual');
     router.push('/dashboard');
   }
 
   async function finalSubmit(submitType: 'manual' | 'auto_timeout') {
     if (!sessionId || sessionId === 'new') return;
 
+    setIsSubmitting(true);
+    const submitDeadline = Date.now() + SUBMIT_TIMEOUT_MS;
+
     const flatAnswers: Record<string, { letter: string; seq: number }> = {};
     Object.entries(answers).forEach(([qId, letter], i) => {
       flatAnswers[qId] = { letter, seq: i + 1 };
     });
 
-    let lastErr: Error | null = null;
-    for (let attempt = 0; attempt < 6; attempt += 1) {
+    const trySubmit = async (): Promise<Response | null> => {
       try {
-        const res = await fetchWithTimeout('/api/test/submit', {
+        return await fetchWithTimeout('/api/test/submit', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sessionId,
-            answers: flatAnswers,
-            clientSeq: seq,
-          }),
+          body: JSON.stringify({ sessionId, answers: flatAnswers, clientSeq: seq }),
         });
-        if (res.ok) {
-          const json = await res.json();
-          if (!isOfflineDisabled()) {
-            await clearPendingAnswers(sessionId).catch(() => {});
-            await removeCachedSession(sessionId).catch(() => {});
-          }
-          setStatus('submitted');
-          setSubmitMessage('Submitted. Your test has been graded.');
-          stopTick();
-          stopHeartbeat();
-          setTimeout(() => {
-            router.replace(
-              `/result/${json.graded?.sessionId ?? sessionId}`
-            );
-          }, 1500);
-          return;
-        }
-        const errJson = await res.json().catch(() => ({}));
-        lastErr = new Error(
-          errJson.error || `Submit failed (${res.status})`
-        );
-      } catch (err: any) {
-        lastErr = err;
+      } catch {
+        return null; // network failure
       }
-      await new Promise((r) =>
-        setTimeout(r, Math.min(1000 * 2 ** attempt, 30_000))
-      );
+    };
+
+    let lastErr: Error | null = null;
+
+    // Retry only on real network failures (fetch throws or times out).
+    // On any HTTP error status, stop and show the server's message.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const res = await trySubmit();
+      if (!res) {
+        lastErr = new Error('Network error. Please check your connection.');
+        if (Date.now() > submitDeadline) break;
+        await new Promise((r) => setTimeout(r, Math.min(1000 * 2 ** attempt, 10_000)));
+        continue;
+      }
+
+      if (res.ok) {
+        const json = await res.json().catch(() => ({}));
+        if (!isOfflineDisabled()) {
+          await clearPendingAnswers(sessionId).catch(() => {});
+          await removeCachedSession(sessionId).catch(() => {});
+        }
+        setStatus('submitted');
+        setSubmitMessage('Submitted. Your test has been graded.');
+        stopTick();
+        stopHeartbeat();
+        setIsSubmitting(false);
+        setTimeout(() => {
+          router.replace(`/result/${json.graded?.sessionId ?? sessionId}`);
+        }, 1500);
+        return;
+      }
+
+      // HTTP error — stop retrying, show server message.
+      const errJson = await res.json().catch(() => ({}));
+      lastErr = new Error(errJson.error || `Submit failed (${res.status})`);
+      break;
     }
 
+    // Show error + Retry button. Never stay on "Submitting..." past the deadline.
     setStatus('active');
-    setSubmitError(
-      lastErr?.message ||
-        'Submit is retrying in the background. Do not close this page.'
-    );
+    setSubmitError(lastErr?.message || 'Submit failed. Please try again.');
     setSubmitMessage('');
+    setIsSubmitting(false);
 
-    const retry = setInterval(async () => {
-      try {
-        const res = await fetchWithTimeout('/api/test/submit', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sessionId,
-            answers: flatAnswers,
-            clientSeq: seq,
-          }),
-        });
-        if (res.ok) {
-          const json = await res.json();
+    if (Date.now() <= submitDeadline) {
+      // Background retry every 10s until deadline
+      const retry = setInterval(async () => {
+        if (Date.now() > submitDeadline) {
+          clearInterval(retry);
+          return;
+        }
+        const res = await trySubmit();
+        if (res && res.ok) {
+          const json = await res.json().catch(() => ({}));
           if (!isOfflineDisabled()) {
             await clearPendingAnswers(sessionId).catch(() => {});
             await removeCachedSession(sessionId).catch(() => {});
@@ -491,17 +493,14 @@ export default function TestPage() {
           setSubmitMessage('Submitted. Your test has been graded.');
           stopTick();
           stopHeartbeat();
+          setIsSubmitting(false);
           clearInterval(retry);
           setTimeout(() => {
-            router.replace(
-              `/result/${json.graded?.sessionId ?? sessionId}`
-            );
+            router.replace(`/result/${json.graded?.sessionId ?? sessionId}`);
           }, 1500);
         }
-      } catch {
-        // keep retrying
-      }
-    }, 10_000);
+      }, 10_000);
+    }
   }
 
   // ---------------- Fetch with timeout ----------------
@@ -542,8 +541,7 @@ export default function TestPage() {
   // ---------------- Keyboard shortcuts ----------------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (isPaused || status === 'submitting' || status === 'submitted')
-        return;
+      if (isPaused || status === 'submitting' || status === 'submitted') return;
       if (e.key >= '1' && e.key <= '4') {
         const idx = parseInt(e.key) - 1;
         const opt = ['A', 'B', 'C', 'D'][idx] as OptionLetter;
@@ -594,9 +592,7 @@ export default function TestPage() {
       <div className="min-h-screen bg-slate-50 p-4">
         <div className="max-w-3xl mx-auto">
           <div className="flex items-center justify-between mb-4">
-            <h1 className="text-lg font-bold text-slate-900">
-              Loading test…
-            </h1>
+            <h1 className="text-lg font-bold text-slate-900">Loading test…</h1>
             <div className="px-4 py-2 rounded-lg bg-slate-200 text-slate-700 font-bold">
               --:--
             </div>
@@ -645,13 +641,15 @@ export default function TestPage() {
     );
   }
 
-  if (submitError && !questions.length) {
+  // Finished (submitted / timed out / abandoned)
+  if (status === 'finished') {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50">
-        <div className="text-center">
-          <h2 className="text-lg font-bold text-red-700 mb-2">
-            {submitError}
-          </h2>
+      <div className="min-h-screen bg-slate-50 p-4 flex items-center justify-center">
+        <div className="max-w-md bg-white rounded-lg border border-slate-200 p-6 shadow-sm text-center">
+          <h2 className="text-xl font-bold text-slate-900 mb-2">Test Finished</h2>
+          <p className="text-slate-600 mb-4">
+            This test has already been submitted or has expired. You cannot continue.
+          </p>
           <button
             onClick={() => router.push('/dashboard')}
             className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
@@ -706,6 +704,17 @@ export default function TestPage() {
         {submitError && (
           <div className="mb-4 p-3 rounded bg-red-50 text-red-700 text-sm border border-red-100">
             {submitError}
+            <button
+              onClick={() => {
+                setSubmitError('');
+                setStatus('submitting');
+                setSubmitMessage('Retrying submit…');
+                finalSubmit('manual');
+              }}
+              className="ml-3 text-xs underline hover:text-red-900"
+            >
+              Retry
+            </button>
           </div>
         )}
 
@@ -724,9 +733,7 @@ export default function TestPage() {
                 Pause time used: {Math.floor(pausedSeconds / 60)}m{' '}
                 {pausedSeconds % 60}s
               </p>
-              <p className="text-sm text-slate-400">
-                Reconnecting automatically…
-              </p>
+              <p className="text-sm text-slate-400">Reconnecting automatically…</p>
             </div>
           </div>
         )}
@@ -746,9 +753,7 @@ export default function TestPage() {
                     key={letter}
                     onClick={() => selectOption(letter as OptionLetter)}
                     disabled={
-                      isPaused ||
-                      status === 'submitting' ||
-                      !current
+                      isPaused || status === 'submitting' || !current
                     }
                     className={optionClassName(selected)}
                   >
@@ -816,20 +821,17 @@ export default function TestPage() {
           <div className="flex items-center gap-2">
             <button
               onClick={handleCancelTest}
-              disabled={isPaused || status === 'submitting'}
+              disabled={isSubmitting}
               className="px-5 py-2.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50"
             >
-              Cancel Test
+              Submit & Exit
             </button>
             <button
               onClick={handleManualSubmit}
-              disabled={
-                isPaused ||
-                status === 'submitting'
-              }
-              className="px-6 py-2.5 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 disabled:opacity-60"
+              disabled={isSubmitting}
+              className="px-6 py-2.5 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 disabled:opacity-50"
             >
-              {status === 'submitting' ? 'Submitting…' : 'Submit Test'}
+              {isSubmitting ? 'Submitting…' : 'Submit Test'}
             </button>
           </div>
         </div>

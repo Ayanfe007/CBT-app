@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { verifyStudentSession } from '@/lib/auth/verify';
 import { supabaseAdmin } from '@/lib/supabase/admin';
-
+import { finalizeExpiredSessions } from '@/lib/db/grading';
+import { markAbandoned } from '@/lib/db/sessions';
 
 interface QuestionOut {
   id: string;
@@ -25,6 +26,14 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: 'sessionId required.' }, { status: 400 });
     }
 
+    // Finalize any expired/abandoned sessions before returning data.
+    // This is idempotent and safe to call on every load.
+    try {
+      await finalizeExpiredSessions();
+    } catch {
+      // best-effort; continue to load this specific session
+    }
+
     const { data: session, error: fetchErr } = await supabaseAdmin
       .from('test_sessions')
       .select('*')
@@ -36,6 +45,26 @@ export async function GET(req: Request) {
     }
     if (session.student_id !== student.studentId) {
       return NextResponse.json({ error: 'Not your session.' }, { status: 403 });
+    }
+
+    // If already submitted (manual, auto_timeout, or abandoned), return finished.
+    if (session.submitted_at) {
+      let resultId: string | null = null;
+      if (session.submit_type !== 'abandoned') {
+        const { data: result } = await supabaseAdmin
+          .from('test_results')
+          .select('id')
+          .eq('session_id', sessionId)
+          .maybeSingle();
+        resultId = result?.id ?? null;
+      }
+      return NextResponse.json({
+        status: 'finished',
+        sessionId: session.id,
+        resultId,
+        submitType: session.submit_type,
+        submittedAt: session.submitted_at,
+      });
     }
 
     const { data: questions } = await supabaseAdmin
@@ -76,6 +105,7 @@ export async function GET(req: Request) {
     });
 
     return NextResponse.json({
+      status: 'active',
       sessionId: session.id,
       endsAt: session.ends_at,
       serverNow: new Date().toISOString(),
