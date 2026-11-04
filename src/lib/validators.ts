@@ -24,3 +24,10 @@ export const studentLoginSchema = z.object({
 });
 
 export type StudentLoginInput = z.infer<typeof studentLoginSchema>;
+
+/** Shared schema for starting a test. Used by both dashboard client and /api/test/start route. */
+export const startTestSchema = z.object({
+  courseId: z.string().uuid('Invalid course ID'),
+});
+
+export type StartTestInput = z.infer<typeof startTestSchema>;

@@ -2,6 +2,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin';
 import { verifyStudentSession } from '@/lib/auth/verify';
 import { finalizeExpiredSessions } from '@/lib/db/grading';
 import { redirect } from 'next/navigation';
+import CourseStartButton from './course-start-button';
 
 interface CourseWithStatus {
   id: string;
@@ -138,7 +139,9 @@ export default async function DashboardPage() {
 
       {coursesWithStatus.length === 0 && (
         <div className="bg-white p-8 rounded-lg border border-slate-200 text-center">
-          <h3 className="text-lg font-medium text-slate-900 mb-2">No courses assigned</h3>
+          <h3 className="text-lg font-medium text-slate-900 mb-2">
+            No courses assigned
+          </h3>
           <p className="text-slate-600">Ask your admin to assign a course to you.</p>
         </div>
       )}
@@ -169,12 +172,8 @@ export default async function DashboardPage() {
             </div>
 
             <div className="flex items-center justify-between text-sm text-slate-600 mb-4">
-              <span>
-                Attempts: {c.attempts_used} / {c.max_attempts}
-              </span>
-              <span className="ml-4">
-                Pass mark: {c.pass_mark_percent}%
-              </span>
+              <span>Attempts: {c.attempts_used} / {c.max_attempts}</span>
+              <span className="ml-4">Pass mark: {c.pass_mark_percent}%</span>
             </div>
 
             <div className="space-y-2">
@@ -189,16 +188,7 @@ export default async function DashboardPage() {
                 </p>
               )}
               {(c.status === 'not_started' || c.status === 'in_progress') && c.is_active && c.attempts_used < c.max_attempts && (
-                <a
-                  href={
-                    c.status === 'in_progress'
-                      ? `/test/${c.sessionId}`
-                      : `/test/new?courseId=${c.id}`
-                  }
-                  className="w-full py-3 px-4 rounded-lg bg-blue-600 text-white font-semibold text-center hover:bg-blue-700 transition"
-                >
-                  {c.status === 'in_progress' ? 'Resume Test' : 'Start Test'}
-                </a>
+                <CourseStartButton course={c} />
               )}
               {c.status === 'completed' && c.sessionId && c.show_result_to_student !== false && (
                 <a

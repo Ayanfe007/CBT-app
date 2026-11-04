@@ -5,8 +5,9 @@ import { supabaseAdmin } from '@/lib/supabase/admin';
 import { createSession } from '@/lib/db/sessions';
 import { shuffle, shuffleOptions } from '@/lib/shuffle';
 import { finalizeExpiredSessions } from '@/lib/db/grading';
+import { startTestSchema } from '@/lib/validators';
 
-const schema = z.object({ courseId: z.string().uuid() });
+const schema = startTestSchema;
 
 function isPinnedOption(text: string): boolean {
   const t = text.toLowerCase().trim();
@@ -30,9 +31,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 });
     }
 
-    const parsed = schema.safeParse(await req.json());
+    const body = await req.json();
+    const parsed = schema.safeParse(body);
     if (!parsed.success) {
-      return NextResponse.json({ error: 'Invalid request.' }, { status: 400 });
+      console.error('[/api/test/start] validation failed. Received keys:', Object.keys(body ?? {}), parsed.error.issues);
+      return NextResponse.json(
+        { error: 'Invalid request.', field: parsed.error.issues[0]?.path.join('.') ?? 'courseId', reason: parsed.error.issues[0]?.message ?? 'Invalid courseId' },
+        { status: 400 }
+      );
     }
 
     const studentId = session.studentId;
