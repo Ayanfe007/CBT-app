@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { verifyStudentSession } from '@/lib/auth/verify';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { gradeSession } from '@/lib/db/grading';
-import { markSubmitted } from '@/lib/db/sessions';
+import { saveAnswers, markSubmitted } from '@/lib/db/sessions';
 
 const answerEntry = z.object({ letter: z.string().min(1), seq: z.number().int().nonnegative() });
 const schema = z.object({

@@ -4,6 +4,7 @@ import { cookies } from 'next/headers';
 import { STUDENT_SESSION_COOKIE, cookieOptions } from '@/lib/auth/cookie';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   const student = await verifyStudentSession();

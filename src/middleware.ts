@@ -2,11 +2,17 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { jwtVerify } from 'jose';
 import { STUDENT_SESSION_COOKIE, ADMIN_SESSION_COOKIE } from '@/lib/auth/cookie';
 
-if (!process.env.SESSION_SECRET) {
-  throw new Error('SESSION_SECRET is required');
-}
+let SECRET: Uint8Array | null = null;
 
-const SECRET = new TextEncoder().encode(process.env.SESSION_SECRET);
+function getSecret(): Uint8Array {
+  if (!SECRET) {
+    if (!process.env.SESSION_SECRET) {
+      throw new Error('SESSION_SECRET is required');
+    }
+    SECRET = new TextEncoder().encode(process.env.SESSION_SECRET);
+  }
+  return SECRET;
+}
 
 async function verifyToken(token: string | undefined, cookieName: string) {
   if (!token) {
@@ -14,7 +20,7 @@ async function verifyToken(token: string | undefined, cookieName: string) {
     return null;
   }
   try {
-    const { payload } = await jwtVerify(token, SECRET);
+    const { payload } = await jwtVerify(token, getSecret());
     console.log(`[middleware] Verified ${cookieName}:`, payload);
     return payload as { role?: string; sub?: string };
   } catch (err: any) {

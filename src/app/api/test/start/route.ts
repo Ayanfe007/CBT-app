@@ -119,15 +119,7 @@ export async function POST(req: Request) {
     const { data: questions } = await supabaseAdmin
       .from('questions')
       .select('id, question_text, option_a, option_b, option_c, option_d, correct_option')
-      .eq('course_id', courseId) as unknown as Array<{
-        id: string;
-        question_text: string;
-        option_a: string;
-        option_b: string;
-        option_c: string;
-        option_d: string;
-        correct_option: string;
-      }>;
+      .eq('course_id', courseId);
 
     if (!questions || questions.length === 0) {
       return NextResponse.json({ error: 'This course has no questions yet.' }, { status: 400 });
@@ -152,7 +144,7 @@ export async function POST(req: Request) {
       const originals = ['A', 'B', 'C', 'D'] as const;
       const pinned = new Set<string>();
       originals.forEach((l) => {
-        const text = q[`option_${l.toLowerCase()}`];
+        const text = (q as Record<string, string>)[`option_${l.toLowerCase()}`];
         if (text && isPinnedOption(text)) pinned.add(l);
       });
 
@@ -168,7 +160,7 @@ export async function POST(req: Request) {
       displayOrder.forEach((origLetter, pos) => {
         const key = ['A', 'B', 'C', 'D'][pos] as 'A' | 'B' | 'C' | 'D';
         const src = `option_${origLetter.toLowerCase()}`;
-        displayOptions[key] = q[src as keyof typeof q];
+        displayOptions[key] = (q as Record<string, string>)[src];
       });
 
       questionsOut.push({

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { verifyStudentSession } from '@/lib/auth/verify';
 import { supabaseAdmin } from '@/lib/supabase/admin';
-import { shutdown } from '@/lib/shutdown';
+
 
 interface QuestionOut {
   id: string;

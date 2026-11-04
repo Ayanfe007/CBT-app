@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import {
   savePendingAnswer,
   getPendingAnswers,
@@ -49,8 +49,8 @@ const REQUEST_TIMEOUT_MS = 15_000;
 
 export default function TestPage() {
   const { sessionId: rawSessionId } = useParams();
-  const sessionId = typeof rawSessionId === 'string' ? rawSessionId : rawSessionId?.[0] ?? '';
-  const [searchParams] = useSearchParams();
+  const sessionId =
+    typeof rawSessionId === 'string' ? rawSessionId : rawSessionId?.[0] ?? '';
   const router = useRouter();
 
   const [status, setStatus] = useState<TestStatus>('loading');
@@ -76,31 +76,8 @@ export default function TestPage() {
   // ---------------- Load session ----------------
   useEffect(() => {
     if (!sessionId || sessionId === 'new') {
-      const courseId = searchParams?.get('courseId');
-      if (!courseId) {
-        setStatus('load-failed');
-        setLoadError('No course specified.');
-        return;
-      }
-      (async () => {
-        try {
-          const res = await fetch('/api/test/start', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ courseId }),
-          });
-          const json = await res.json();
-          if (!res.ok) {
-            setStatus('load-failed');
-            setLoadError(json.error || 'Could not start test.');
-            return;
-          }
-          router.replace(`/test/${json.sessionId}`);
-        } catch (err: any) {
-          setStatus('load-failed');
-          setLoadError(err.message || 'Could not start test.');
-        }
-      })();
+      setStatus('load-failed');
+      setLoadError('No course specified.');
       return;
     }
 
@@ -109,14 +86,19 @@ export default function TestPage() {
     (async () => {
       let cached: SessionCache | null = null;
       if (!isOfflineDisabled()) {
-        try { cached = await getCachedSession(sessionId); } catch {}
+        try {
+          cached = await getCachedSession(sessionId);
+        } catch {}
       }
 
       let serverData: SessionResponse | null = null;
       try {
-        const res = await fetch(`/api/test/session?sessionId=${sessionId}`, {
-          headers: { 'Cache-Control': 'no-store' },
-        });
+        const res = await fetch(
+          `/api/test/session?sessionId=${sessionId}`,
+          {
+            headers: { 'Cache-Control': 'no-store' },
+          }
+        );
         if (!res.ok) {
           if (res.status === 401 || res.status === 403) {
             if (!cancelled) {
@@ -140,7 +122,9 @@ export default function TestPage() {
           serverEndsAtRef.current = cached.endsAt;
           setStatus('active');
           setIsPaused(true);
-          setSubmitMessage('Running from cached session. Reconnecting to server…');
+          setSubmitMessage(
+            'Running from cached session. Reconnecting to server…'
+          );
           startTick();
           startHeartbeat();
           return;
@@ -152,6 +136,12 @@ export default function TestPage() {
 
       if (cancelled) return;
 
+      if (!serverData) {
+        setStatus('load-failed');
+        setLoadError('Could not load your test.');
+        return;
+      }
+
       if (serverData.submittedAt) {
         router.replace(`/result/${serverData.sessionId}`);
         return;
@@ -159,7 +149,9 @@ export default function TestPage() {
 
       if (!serverData.questions || serverData.questions.length === 0) {
         setStatus('load-failed');
-        setLoadError('No questions found for this session. Please contact your admin.');
+        setLoadError(
+          'No questions found for this session. Please contact your admin.'
+        );
         return;
       }
 
@@ -173,13 +165,8 @@ export default function TestPage() {
       if (!isOfflineDisabled()) {
         void cacheSession({
           sessionId: serverData.sessionId,
-          courseId: '',
           endsAt: serverData.endsAt,
-          durationMinutes: 0,
           questions: serverData.questions,
-          questionOrder: serverData.questionOrder,
-          optionOrders: serverData.optionOrders,
-          startedAt: '',
         });
       }
 
@@ -192,7 +179,7 @@ export default function TestPage() {
       stopHeartbeat();
       stopTick();
     };
-  }, [sessionId, searchParams, router]);
+  }, [sessionId, router]);
 
   // ---------------- Online/offline detection ----------------
   useEffect(() => {
@@ -205,7 +192,9 @@ export default function TestPage() {
     const onOffline = () => {
       if (status === 'active') {
         setIsPaused(true);
-        setSubmitMessage('Connection lost. Your timer is paused and your answers are saved. Reconnect to continue.');
+        setSubmitMessage(
+          'Connection lost. Your timer is paused and your answers are saved. Reconnect to continue.'
+        );
       }
     };
     window.addEventListener('online', onOnline);
@@ -220,7 +209,8 @@ export default function TestPage() {
   const syncTimer = useCallback((endsAt: string, serverNow?: string) => {
     serverEndsAtRef.current = endsAt;
     if (serverNow) {
-      offsetRef.current = new Date(serverNow).getTime() - Date.now();
+      offsetRef.current =
+        new Date(serverNow).getTime() - Date.now();
     }
     lastSyncLocalRef.current = Date.now();
   }, []);
@@ -243,14 +233,17 @@ export default function TestPage() {
       });
       if (!res.ok) return;
       const json = await res.json();
-      offsetRef.current = new Date(json.serverNow).getTime() - Date.now();
+      offsetRef.current =
+        new Date(json.serverNow).getTime() - Date.now();
       lastSyncLocalRef.current = Date.now();
       serverEndsAtRef.current = json.endsAt;
       setIsPaused(false);
       setSubmitMessage('');
       setPausedSeconds(json.pausedSeconds ?? 0);
       if (json.allowanceExhausted) {
-        setSubmitMessage('Pause allowance used up — the clock now runs normally.');
+        setSubmitMessage(
+          'Pause allowance used up — the clock now runs normally.'
+        );
       }
     } catch {
       // Network failure — handled by offline event
@@ -300,10 +293,12 @@ export default function TestPage() {
     if (pending.length === 0 && !pendingDirty) return;
     pendingDirty = false;
 
-    const latestByQuestion: Record<string, { letter: string; seq: number }> = {};
+    const latestByQuestion: Record<string, { letter: string; seq: number }> =
+      {};
     pending.forEach((p) => {
       const cur = latestByQuestion[p.questionId];
-      if (!cur || p.seq > cur.seq) latestByQuestion[p.questionId] = { letter: p.letter, seq: p.seq };
+      if (!cur || p.seq > cur.seq)
+        latestByQuestion[p.questionId] = { letter: p.letter, seq: p.seq };
     });
 
     Object.entries(answers).forEach(([qId, letter]) => {
@@ -329,7 +324,11 @@ export default function TestPage() {
       const res = await fetchWithTimeout('/api/test/answers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, answers: latestByQuestion, clientSeq: seq }),
+        body: JSON.stringify({
+          sessionId,
+          answers: latestByQuestion,
+          clientSeq: seq,
+        }),
       });
       if (res.ok) {
         pending.forEach((p) => void removePendingAnswer(p.id));
@@ -376,7 +375,12 @@ export default function TestPage() {
     if (status === 'submitting' || status === 'submitted') return;
     const unanswered = questions.filter((q) => !answers[q.id]).length;
     if (unanswered > 0) {
-      if (!window.confirm(`You have ${unanswered} unanswered question(s). Submit anyway?`)) return;
+      if (
+        !window.confirm(
+          `You have ${unanswered} unanswered question(s). Submit anyway?`
+        )
+      )
+        return;
     }
     setStatus('submitting');
     setSubmitMessage('Submitting your test, do not close this page…');
@@ -384,7 +388,12 @@ export default function TestPage() {
   }
 
   async function handleCancelTest() {
-    if (!window.confirm('Cancel this test? Your progress will be lost and you will return to the dashboard.')) return;
+    if (
+      !window.confirm(
+        'Cancel this test? Your progress will be lost and you will return to the dashboard.'
+      )
+    )
+      return;
     setStatus('submitting');
     setSubmitMessage('Cancelling test…');
     try {
@@ -419,7 +428,11 @@ export default function TestPage() {
         const res = await fetchWithTimeout('/api/test/submit', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId, answers: flatAnswers, clientSeq: seq }),
+          body: JSON.stringify({
+            sessionId,
+            answers: flatAnswers,
+            clientSeq: seq,
+          }),
         });
         if (res.ok) {
           const json = await res.json();
@@ -431,19 +444,30 @@ export default function TestPage() {
           setSubmitMessage('Submitted. Your test has been graded.');
           stopTick();
           stopHeartbeat();
-          setTimeout(() => router.replace(`/result/${json.graded?.sessionId ?? sessionId}`), 1500);
+          setTimeout(() => {
+            router.replace(
+              `/result/${json.graded?.sessionId ?? sessionId}`
+            );
+          }, 1500);
           return;
         }
         const errJson = await res.json().catch(() => ({}));
-        lastErr = new Error(errJson.error || `Submit failed (${res.status})`);
+        lastErr = new Error(
+          errJson.error || `Submit failed (${res.status})`
+        );
       } catch (err: any) {
         lastErr = err;
       }
-      await new Promise((r) => setTimeout(r, Math.min(1000 * 2 ** attempt, 30_000)));
+      await new Promise((r) =>
+        setTimeout(r, Math.min(1000 * 2 ** attempt, 30_000))
+      );
     }
 
     setStatus('active');
-    setSubmitError(lastErr?.message || 'Submit is retrying in the background. Do not close this page.');
+    setSubmitError(
+      lastErr?.message ||
+        'Submit is retrying in the background. Do not close this page.'
+    );
     setSubmitMessage('');
 
     const retry = setInterval(async () => {
@@ -451,7 +475,11 @@ export default function TestPage() {
         const res = await fetchWithTimeout('/api/test/submit', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId, answers: flatAnswers, clientSeq: seq }),
+          body: JSON.stringify({
+            sessionId,
+            answers: flatAnswers,
+            clientSeq: seq,
+          }),
         });
         if (res.ok) {
           const json = await res.json();
@@ -464,7 +492,11 @@ export default function TestPage() {
           stopTick();
           stopHeartbeat();
           clearInterval(retry);
-          setTimeout(() => router.replace(`/result/${json.graded?.sessionId ?? sessionId}`), 1500);
+          setTimeout(() => {
+            router.replace(
+              `/result/${json.graded?.sessionId ?? sessionId}`
+            );
+          }, 1500);
         }
       } catch {
         // keep retrying
@@ -502,13 +534,16 @@ export default function TestPage() {
       });
     };
     window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload);
+    };
   }, [sessionId, answers]);
 
   // ---------------- Keyboard shortcuts ----------------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (isPaused || status === 'submitting' || status === 'submitted') return;
+      if (isPaused || status === 'submitting' || status === 'submitted')
+        return;
       if (e.key >= '1' && e.key <= '4') {
         const idx = parseInt(e.key) - 1;
         const opt = ['A', 'B', 'C', 'D'][idx] as OptionLetter;
@@ -524,19 +559,47 @@ export default function TestPage() {
       }
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+    };
   }, [questions, isPaused, status]);
 
-  // ---------------- Render ----------------
+  // ---------------- Render helpers ----------------
+  const mins = Math.floor(timeRemaining / 60);
+  const secs = timeRemaining % 60;
+  const isCritical = timeRemaining <= 5 * 60;
+  const timerClassName = isCritical
+    ? 'px-4 py-2 rounded-lg font-bold text-red-700 border border-red-300 animate-pulse bg-red-50'
+    : 'px-4 py-2 rounded-lg font-bold text-slate-700 border border-slate-300 bg-white';
 
+  const optionClassName = (selected: boolean) =>
+    selected
+      ? 'w-full text-left px-4 py-3 rounded-lg border text-left bg-blue-100 border-blue-600 text-blue-700 font-semibold'
+      : 'w-full text-left px-4 py-3 rounded-lg border text-left bg-white border-slate-300 text-slate-700 hover:bg-slate-50';
+
+  const gridButtonClassName = (
+    currentq: boolean,
+    answered: boolean
+  ) =>
+    currentq
+      ? 'w-8 h-8 rounded-full text-xs font-semibold bg-blue-600 text-white'
+      : answered
+      ? 'w-8 h-8 rounded-full text-xs font-semibold bg-green-100 text-green-700 border border-green-300'
+      : 'w-8 h-8 rounded-full text-xs font-semibold bg-white border border-slate-300 text-slate-600 hover:bg-slate-50';
+
+  // ---------------- Render ----------------
   // Loading skeleton
   if (status === 'loading') {
     return (
       <div className="min-h-screen bg-slate-50 p-4">
         <div className="max-w-3xl mx-auto">
           <div className="flex items-center justify-between mb-4">
-            <h1 className="text-lg font-bold text-slate-900">Loading test…</h1>
-            <div className="px-4 py-2 rounded-lg bg-slate-200 text-slate-700 font-bold">--:--</div>
+            <h1 className="text-lg font-bold text-slate-900">
+              Loading test…
+            </h1>
+            <div className="px-4 py-2 rounded-lg bg-slate-200 text-slate-700 font-bold">
+              --:--
+            </div>
           </div>
           <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm mb-6">
             <div className="h-8 bg-slate-200 rounded w-full mb-4"></div>
@@ -545,7 +608,7 @@ export default function TestPage() {
               {[1, 2, 3, 4].map((i) => (
                 <div key={i} className="h-12 bg-slate-200 rounded"></div>
               ))}
-            )}
+            </div>
           </div>
         </div>
       </div>
@@ -557,7 +620,9 @@ export default function TestPage() {
     return (
       <div className="min-h-screen bg-slate-50 p-4 flex items-center justify-center">
         <div className="max-w-md bg-white rounded-lg border border-slate-200 p-6 shadow-sm text-center">
-          <h2 className="text-xl font-bold text-slate-900 mb-2">Could not load your test</h2>
+          <h2 className="text-xl font-bold text-slate-900 mb-2">
+            Could not load your test
+          </h2>
           <p className="text-slate-600 mb-4">{loadError}</p>
           <button
             onClick={() => {
@@ -584,7 +649,9 @@ export default function TestPage() {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50">
         <div className="text-center">
-          <h2 className="text-lg font-bold text-red-700 mb-2">{submitError}</h2>
+          <h2 className="text-lg font-bold text-red-700 mb-2">
+            {submitError}
+          </h2>
           <button
             onClick={() => router.push('/dashboard')}
             className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
@@ -609,9 +676,6 @@ export default function TestPage() {
 
   const current = questions[currentIndex];
   const isAnswered = !!current?.id && !!answers[current.id];
-  const mins = Math.floor(timeRemaining / 60);
-  const secs = timeRemaining % 60;
-  const isCritical = timeRemaining <= 5 * 60;
 
   return (
     <div className="min-h-screen bg-slate-50 p-4">
@@ -619,19 +683,17 @@ export default function TestPage() {
         {/* Header + timer */}
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="text-lg font-bold text-slate-900">Test in Progress</h1>
+            <h1 className="text-lg font-bold text-slate-900">
+              Test in Progress
+            </h1>
             <p className="text-sm text-slate-600">
               Question {currentIndex + 1} of {questions.length}
             </p>
           </div>
-          <div
-            className={`px-4 py-2 rounded-lg font-bold text-slate-900 border ${
-              isCritical
-                ? 'bg-red-50 text-red-700 border-red-300 animate-pulse'
-                : 'bg-white text-slate-700 border-slate-300'
-            }`}
-          >
-            {mins.toString().padStart(2, '0')}:{secs.toString().padStart(2, '0')}
+          <div className={timerClassName}>
+            {mins.toString().padStart(2, '0')}:{secs
+              .toString()
+              .padStart(2, '0')}
           </div>
         </div>
 
@@ -652,14 +714,19 @@ export default function TestPage() {
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/90 backdrop-blur-sm">
             <div className="bg-white rounded-lg p-6 max-w-md w-full shadow-xl text-center">
               <div className="text-yellow-500 text-4xl mb-4">⚠️</div>
-              <h2 className="text-xl font-bold text-slate-900 mb-2">Connection Lost</h2>
+              <h2 className="text-xl font-bold text-slate-900 mb-2">
+                Connection Lost
+              </h2>
               <p className="text-slate-600 mb-4">
                 Your timer is paused and your answers are saved. Answering is locked until the connection returns.
               </p>
               <p className="text-sm text-slate-500 mb-4">
-                Pause time used: {Math.floor(pausedSeconds / 60)}m {pausedSeconds % 60}s
+                Pause time used: {Math.floor(pausedSeconds / 60)}m{' '}
+                {pausedSeconds % 60}s
               </p>
-              <p className="text-sm text-slate-400">Reconnecting automatically…</p>
+              <p className="text-sm text-slate-400">
+                Reconnecting automatically…
+              </p>
             </div>
           </div>
         )}
@@ -667,27 +734,29 @@ export default function TestPage() {
         {/* Question card */}
         <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm mb-6">
           <div className="text-lg text-slate-800 mb-6 leading-relaxed">
-            {currentIndex + 1}. {current?.question_text || 'Loading question…'}
+            {currentIndex + 1}.{' '}
+            {current?.question_text || 'Loading question…'}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {current && ['A', 'B', 'C', 'D'].map((letter) => {
-              const selected = answers[current.id] === letter;
-              return (
-                <button
-                  key={letter}
-                  onClick={() => selectOption(letter as OptionLetter)}
-                  disabled={isPaused || status === 'submitting' || !current}
-                  className={`w-full text-left px-4 py-3 rounded-lg border text-left ${
-                    selected
-                      ? 'bg-blue-100 border-blue-600 text-blue-700 font-semibold'
-                      : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
-                  }`}
-                >
-                  <span className="font-mono font-bold mr-2">{letter}</span>
-                  {current.options[letter as OptionLetter]}
-                </button>
-              );
-            })}
+            {current &&
+              ['A', 'B', 'C', 'D'].map((letter) => {
+                const selected = answers[current.id] === letter;
+                return (
+                  <button
+                    key={letter}
+                    onClick={() => selectOption(letter as OptionLetter)}
+                    disabled={
+                      isPaused ||
+                      status === 'submitting' ||
+                      !current
+                    }
+                    className={optionClassName(selected)}
+                  >
+                    <span className="font-mono font-bold mr-2">{letter}</span>{' '}
+                    {current.options[letter as OptionLetter]}
+                  </button>
+                );
+              })}
           </div>
         </div>
 
@@ -705,13 +774,7 @@ export default function TestPage() {
                   key={i}
                   onClick={() => setCurrentIndex(i)}
                   disabled={isPaused || status === 'submitting'}
-                  className={`w-8 h-8 rounded-full text-xs font-semibold ${
-                    currentq
-                      ? 'bg-blue-600 text-white'
-                      : answered
-                      ? 'bg-green-100 text-green-700 border border-green-300'
-                      : 'bg-white border border-slate-300 text-slate-600 hover:bg-slate-50'
-                  }`}
+                  className={gridButtonClassName(currentq, answered)}
                 >
                   {i + 1}
                 </button>
@@ -723,8 +786,12 @@ export default function TestPage() {
         {/* Navigation */}
         <div className="flex items-center justify-between">
           <button
-            onClick={() => setCurrentIndex((i) => (i > 0 ? i - 1 : questions.length - 1))}
-            disabled={currentIndex === 0 || isPaused || status === 'submitting'}
+            onClick={() =>
+              setCurrentIndex((i) => (i > 0 ? i - 1 : questions.length - 1))
+            }
+            disabled={
+              currentIndex === 0 || isPaused || status === 'submitting'
+            }
             className="px-5 py-2.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
             Previous
@@ -732,9 +799,15 @@ export default function TestPage() {
 
           <button
             onClick={() =>
-              setCurrentIndex((i) => (i < questions.length - 1 ? i + 1 : 0))
+              setCurrentIndex((i) =>
+                i < questions.length - 1 ? i + 1 : 0
+              )
             }
-            disabled={currentIndex === questions.length - 1 || isPaused || status === 'submitting'}
+            disabled={
+              currentIndex === questions.length - 1 ||
+              isPaused ||
+              status === 'submitting'
+            }
             className="px-5 py-2.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
             Next
@@ -750,7 +823,10 @@ export default function TestPage() {
             </button>
             <button
               onClick={handleManualSubmit}
-              disabled={isPaused || status === 'submitting' || status === 'submitted'}
+              disabled={
+                isPaused ||
+                status === 'submitting'
+              }
               className="px-6 py-2.5 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 disabled:opacity-60"
             >
               {status === 'submitting' ? 'Submitting…' : 'Submit Test'}
