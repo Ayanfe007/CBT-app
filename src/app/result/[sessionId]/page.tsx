@@ -1,6 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { verifyStudentSession } from '@/lib/auth/verify';
-import { regradeSession } from '@/lib/db/grading';
+import { gradeSession } from '@/lib/db/grading';
 import { redirect } from 'next/navigation';
 
 interface ReviewItem {
@@ -10,7 +10,6 @@ interface ReviewItem {
   studentAnswer: string | null;
   correctAnswer: string;
   isCorrect: boolean;
-  displayLabels: Record<'A' | 'B' | 'C' | 'D', string>;
 }
 
 export default async function ResultPage({
@@ -22,7 +21,6 @@ export default async function ResultPage({
   const student = await verifyStudentSession();
   if (!student) redirect('/login');
 
-  // Fetch session + verify ownership.
   const { data: session, error: fetchErr } = await supabaseAdmin
     .from('test_sessions')
     .select('*, courses(*)')
@@ -41,12 +39,10 @@ export default async function ResultPage({
   const showResult = course.show_result_to_student !== false;
   const showReview = course.show_review_to_student !== false;
 
-  // If session is not submitted, redirect to test or dashboard.
   if (!s.submitted_at) {
     redirect(`/test/${sessionId}`);
   }
 
-  // Fetch result. If missing but session is submitted, grade on the spot.
   let { data: result, error: resultErr } = await supabaseAdmin
     .from('test_results')
     .select('*')
@@ -55,7 +51,7 @@ export default async function ResultPage({
 
   if (!result) {
     try {
-      const regraded = await regradeSession(sessionId);
+      const regraded = await gradeSession(sessionId, 'manual');
       if (regraded) {
         result = {
           id: '',
@@ -81,69 +77,51 @@ export default async function ResultPage({
   if (resultErr) {
     return (
       <div className="max-w-md mx-auto p-6 text-center">
-        <h2 className="text-xl font-bold text-slate-900 mb-2">Could not load result</h2>
+        <h2 className="text-xl font-bold text-slate-900 mb-2">
+          Could not load result
+        </h2>
         <p className="text-slate-600 mb-4">{resultErr?.message || 'Unknown error'}</p>
         <button
           onClick={() => {
-            // Client-side retry via router would need 'use client'; use a link instead.
+            window.location.reload();
           }}
           className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
         >
-          <a href={`/result/${sessionId}`} className="text-white">Retry</a>
+          Retry
         </button>
       </div>
     );
   }
 
-  // Build answers map: question_id -> original letter.
-  const answers: Record<string, string> = {};
-  const rawAnswers = (s.answers as Record<string, { letter: string }> | null) ?? {};
-  Object.entries(rawAnswers).forEach(([qId, v]) => {
-    answers[qId] = v.letter;
-  });
-
-  // Build review (only if show_review_to_student).
   let review: ReviewItem[] | null = null;
   if (showReview) {
     const { data: questions } = await supabaseAdmin
       .from('questions')
       .select('id, question_text, option_a, option_b, option_c, option_d, correct_option')
-      .eq('course_id', s.course_id);
+      .eq('course_id', s.course_id)
+      .order('created_at');
 
     const questionOrder = (s.question_order as string[]) ?? [];
-    const optionOrders = (s.option_orders as Record<string, string[]>) ?? {};
+    const answers = (s.answers as Record<string, { letter: string }> | null) ?? {};
+    const qMap = new Map((questions as any[] | null)?.map((q) => [q.id, q]) ?? []);
 
     review = questionOrder.map((qId: string, idx: number) => {
-      const q = (questions as any[] | null)?.find((x) => x.id === qId);
+      const q = qMap.get(qId);
       if (!q) return null;
-      const shuffled = optionOrders[qId] ?? ['A', 'B', 'C', 'D'];
-      const letterToText: Record<string, string> = {
-        A: q.option_a,
-        B: q.option_b,
-        C: q.option_c,
-        D: q.option_d,
-      };
-      const displayLabels: Record<'A' | 'B' | 'C' | 'D', string> = {
-        A: shuffled[0],
-        B: shuffled[1],
-        C: shuffled[2],
-        D: shuffled[3],
-      };
-      const studentAnswer = answers[qId] ?? null;
+      const studentAnswer = answers[qId]?.letter ?? null;
       const correctAnswer = q.correct_option;
       return {
         questionNumber: idx + 1,
         questionText: q.question_text,
         options: {
-          A: letterToText[shuffled[0]],
-          B: letterToText[shuffled[1]],
-          C: letterToText[shuffled[2]],
-          D: letterToText[shuffled[3]],
+          A: q.option_a,
+          B: q.option_b,
+          C: q.option_c,
+          D: q.option_d,
         },
         studentAnswer,
         correctAnswer,
         isCorrect: studentAnswer === correctAnswer,
-        displayLabels,
       };
     }).filter(Boolean) as ReviewItem[];
   }
@@ -195,7 +173,9 @@ export default async function ResultPage({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-slate-600 mb-6">
             <div className="p-3 rounded bg-slate-50 border border-slate-200">
               <div className="text-xs font-semibold text-slate-500 uppercase">Score</div>
-              <div className="text-lg font-bold">{result.score} / {result.total_questions}</div>
+              <div className="text-lg font-bold">
+                {result.score} / {result.total_questions}
+              </div>
             </div>
             <div className="p-3 rounded bg-slate-50 border border-slate-200">
               <div className="text-xs font-semibold text-slate-500 uppercase">Submit type</div>
@@ -252,13 +232,12 @@ export default async function ResultPage({
                     </div>
                     <div className="text-slate-800 mb-3">{item.questionText}</div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-                      {(['A', 'B', 'C', 'D'] as const).map((pos) => {
-                        const origLetter = item.displayLabels[pos] as 'A' | 'B' | 'C' | 'D';
-                        const isStudent = item.studentAnswer === origLetter;
-                        const isCorrect = item.correctAnswer === origLetter;
+                      {(['A', 'B', 'C', 'D'] as const).map((letter) => {
+                        const isStudent = item.studentAnswer === letter;
+                        const isCorrect = item.correctAnswer === letter;
                         return (
                           <div
-                            key={pos}
+                            key={letter}
                             className={`p-2 rounded text-left border ${
                               isCorrect
                                 ? 'bg-green-50 border-green-200 text-green-800'
@@ -267,8 +246,8 @@ export default async function ResultPage({
                                 : 'bg-slate-50 border-slate-200 text-slate-700'
                             }`}
                           >
-                            <span className="font-mono font-bold mr-1">{pos}</span>
-                            {item.options[origLetter]}
+                            <span className="font-mono font-bold mr-1">{letter}</span>{' '}
+                            {item.options[letter]}
                             {isCorrect && <span className="ml-2 text-green-600 text-xs">✓</span>}
                             {isStudent && !isCorrect && (
                               <span className="ml-2 text-red-600 text-xs">your answer</span>

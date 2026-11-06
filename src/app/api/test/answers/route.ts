@@ -3,10 +3,9 @@ import { NextResponse } from 'next/server';
 import { verifyStudentSession } from '@/lib/auth/verify';
 import { saveAnswers } from '@/lib/db/sessions';
 
-const answerEntry = z.object({ letter: z.string().min(1), seq: z.number().int().nonnegative() });
-const schema = z.object({
+const answerEntry = z.object({
   sessionId: z.string().uuid(),
-  answers: z.record(z.string(), answerEntry),
+  answers: z.record(z.string(), z.object({ letter: z.string().min(1), seq: z.number().int().nonnegative() })),
   clientSeq: z.number().int().nonnegative().default(0),
 });
 
@@ -20,7 +19,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 });
     }
 
-    const parsed = schema.safeParse(await req.json());
+    const parsed = answerEntry.safeParse(await req.json());
     if (!parsed.success) {
       return NextResponse.json({ error: 'Invalid request.' }, { status: 400 });
     }

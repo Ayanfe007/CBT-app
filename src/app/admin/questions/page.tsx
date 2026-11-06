@@ -22,17 +22,19 @@ export default function QuestionsPage() {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const [showParser, setShowParser] = useState(false);
+  const [parserText, setParserText] = useState('');
+  const [parseDone, setParseDone] = useState(false);
+  const [parseValid, setParseValid] = useState<any[]>([]);
+  const [parseErrors, setParseErrors] = useState<any[]>([]);
 
   const showToast = useCallback((type: 'success' | 'error', message: string) => {
     setToast({ type, message });
     setTimeout(() => setToast(null), 4000);
   }, []);
-  const [showParser, setShowParser] = useState(false);
-  const [parserText, setParserText] = useState('');
-  const [parseValid, setParseValid] = useState<any[]>([]);
-  const [parseErrors, setParseErrors] = useState<any[]>([]);
-  const [parseDone, setParseDone] = useState(false);
 
   const loadCourses = useCallback(async () => {
     const res = await fetch('/api/admin/courses', { headers: { 'Cache-Control': 'no-store' } });
@@ -54,12 +56,34 @@ export default function QuestionsPage() {
 
   async function deleteQuestion(id: string) {
     if (!window.confirm('Delete this question?')) return;
+    setSubmitting(true);
     const res = await fetch(`/api/admin/questions/${id}`, { method: 'DELETE' });
+    setSubmitting(false);
     if (res.ok) {
       loadQuestions();
-      showToast('success', 'Question deleted.');
+      showToast('success', 'Question deleted successfully.');
     } else {
       showToast('error', 'Delete failed.');
+    }
+  }
+
+  async function editQuestion(id: string) {
+    const q = questions.find((x) => x.id === id);
+    if (!q) return;
+    const newText = window.prompt('Edit question text:', q.question_text);
+    if (newText === null || newText.trim() === '') return;
+    setSubmitting(true);
+    const res = await fetch(`/api/admin/questions/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question_text: newText.trim() }),
+    });
+    setSubmitting(false);
+    if (res.ok) {
+      loadQuestions();
+      showToast('success', 'Question updated successfully.');
+    } else {
+      showToast('error', 'Update failed.');
     }
   }
 
@@ -77,6 +101,7 @@ export default function QuestionsPage() {
 
   async function handleSaveParsed() {
     if (!selectedCourseId) { setError('Select a course first.'); return; }
+    setSubmitting(true);
     for (const q of parseValid) {
       await fetch('/api/admin/questions', {
         method: 'POST',
@@ -84,21 +109,47 @@ export default function QuestionsPage() {
         body: JSON.stringify({
           course_id: selectedCourseId,
           question_text: q.question_text,
-          option_a: q.options.A,
-          option_b: q.options.B,
-          option_c: q.options.C,
-          option_d: q.options.D,
+          option_a: q.option_a,
+          option_b: q.option_b,
+          option_c: q.option_c,
+          option_d: q.option_d,
           correct_option: q.correct_option,
         }),
       });
     }
+    setSubmitting(false);
     setParseDone(false);
     setParseValid([]);
     setParseErrors([]);
     setParserText('');
     setShowParser(false);
     loadQuestions();
-    showToast('success', `Saved ${parseValid.length} question(s).`);
+    showToast('success', `Saved ${parseValid.length} question(s) successfully.`);
+  }
+
+  async function handleVerifyGrading() {
+    if (!selectedCourseId) { setError('Select a course first.'); return; }
+    setSubmitting(true);
+    try {
+      const res = await fetch(`/api/admin/questions/verify?course_id=${selectedCourseId}`, {
+        headers: { 'Cache-Control': 'no-store' },
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        showToast('error', json.error || 'Verify grading failed.');
+        return;
+      }
+      const failed = json.results.filter((r: any) => !r.pass).length;
+      if (failed === 0) {
+        showToast('success', `Verify grading passed: all ${json.results.length} questions have a correct_option set.`);
+      } else {
+        showToast('error', `Verify grading failed: ${failed} of ${json.results.length} questions are missing correct_option.`);
+      }
+    } catch (err: any) {
+      showToast('error', err.message || 'Verify grading failed.');
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -107,15 +158,22 @@ export default function QuestionsPage() {
         <h1 className="text-2xl font-bold text-slate-900">Questions</h1>
         <button
           onClick={() => { setShowParser(true); setParseDone(false); }}
-          className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
+          disabled={submitting}
+          className={submitting
+            ? "px-4 py-2 rounded-md bg-blue-400 text-white cursor-not-allowed"
+            : "px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"}
         >
-          + Upload Questions (paste text)
+          {submitting ? 'Submitting...' : '+ Upload Questions (paste text)'}
         </button>
       </div>
 
       <Toast />
       {toast && (
-        <div className={`p-3 rounded text-sm font-medium flex items-start gap-3 ${toast.type === 'success' ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-red-100 text-red-800 border border-red-200'}`}>
+        <div className={`p-3 rounded text-sm font-medium flex items-start gap-3 ${
+          toast.type === 'success'
+            ? 'bg-green-100 text-green-800 border border-green-200'
+            : 'bg-red-100 text-red-800 border border-red-200'
+        }`}>
           <span>{toast.type === 'success' ? '✓' : '✕'}</span>
           <span>{toast.message}</span>
         </div>
@@ -138,6 +196,17 @@ export default function QuestionsPage() {
             ))}
           </select>
         </div>
+        {selectedCourseId && (
+          <button
+            onClick={handleVerifyGrading}
+            disabled={submitting}
+            className={submitting
+              ? "px-4 py-2 rounded-md bg-blue-400 text-white cursor-not-allowed"
+              : "px-4 py-2 rounded-md bg-green-600 text-white hover:bg-green-700"}
+          >
+            {submitting ? 'Verifying...' : 'Verify Grading'}
+          </button>
+        )}
       </div>
 
       {!selectedCourseId && (
@@ -160,7 +229,7 @@ export default function QuestionsPage() {
                   <th className="p-3 border border-slate-200">B</th>
                   <th className="p-3 border border-slate-200">C</th>
                   <th className="p-3 border border-slate-200">D</th>
-                  <th className="p-3 border border-slate-200">Correct</th>
+                  <th className="p-3 border border-slate-200 text-center">Correct</th>
                   <th className="p-3 border border-slate-200">Actions</th>
                 </tr>
               </thead>
@@ -172,11 +241,26 @@ export default function QuestionsPage() {
                     <td className="p-3 border border-slate-200 text-sm">{q.option_b}</td>
                     <td className="p-3 border border-slate-200 text-sm">{q.option_c}</td>
                     <td className="p-3 border border-slate-200 text-sm">{q.option_d}</td>
-                    <td className="p-3 border border-slate-200 text-sm font-mono">{q.correct_option}</td>
+                    <td className="p-3 border border-slate-200 text-sm font-mono text-center">
+                      {q.correct_option}
+                    </td>
                     <td className="p-3 border border-slate-200">
                       <button
+                        onClick={() => editQuestion(q.id)}
+                        disabled={submitting}
+                        className={`text-xs px-2 py-1 border border-slate-300 rounded text-slate-700 ${
+                          submitting ? 'opacity-50 cursor-not-allowed' : 'hover:bg-slate-100'
+                        }`}
+                      >
+                        Edit
+                      </button>
+                      {' '}
+                      <button
                         onClick={() => deleteQuestion(q.id)}
-                        className="text-xs px-2 py-1 border border-red-200 rounded text-red-600 hover:bg-red-50"
+                        disabled={submitting}
+                        className={`text-xs px-2 py-1 border border-red-200 rounded text-red-600 ${
+                          submitting ? 'opacity-50 cursor-not-allowed' : 'hover:bg-red-50'
+                        }`}
                       >
                         Delete
                       </button>
@@ -193,7 +277,12 @@ export default function QuestionsPage() {
         <h2 className="text-lg font-bold text-slate-900 mb-4">Upload Questions</h2>
         <p className="text-sm text-slate-600 mb-4">
           Paste questions in the supported format:<br />
-          <span className="font-mono text-xs">1. What is a computer? a. Machine b. Animal c. Plant d. Rock [Ans: A]</span>
+          <span className="font-mono text-xs">
+            1. What is 15 - 7? a. 5 b. 6 c. 7 d. 8 [Ans: D]
+          </span><br />
+          <span className="font-mono text-xs text-slate-500">
+            Each question: number + question text + options a-d + [Ans: X] where X is the correct option letter.
+          </span>
         </p>
         <textarea
           required
@@ -205,10 +294,12 @@ export default function QuestionsPage() {
         <div className="flex gap-2 mb-4">
           <button
             onClick={handleParse}
-            disabled={!parserText.trim()}
-            className="px-4 py-2 rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            disabled={!parserText.trim() || submitting}
+            className={`px-4 py-2 rounded-md border border-slate-300 text-slate-700 ${
+              submitting ? 'opacity-50 cursor-not-allowed' : 'hover:bg-slate-50'
+            }`}
           >
-            Preview
+            {submitting ? 'Processing...' : 'Preview'}
           </button>
           <button
             onClick={() => setShowParser(false)}
@@ -228,7 +319,7 @@ export default function QuestionsPage() {
                     <div key={i} className="mb-2 border-b border-green-100 pb-2">
                       <div className="text-green-800 font-semibold">{q.question_text}</div>
                       <div className="text-xs text-slate-600">
-                        A: {q.options.A} | B: {q.options.B} | C: {q.options.C} | D: {q.options.D} → Ans: {q.correct_option}
+                        A: {q.option_a} | B: {q.option_b} | C: {q.option_c} | D: {q.option_d} → Ans: {q.correct_option}
                       </div>
                     </div>
                   ))}
@@ -249,8 +340,10 @@ export default function QuestionsPage() {
               </div>
             </div>
             {parseValid.length > 0 && selectedCourseId && (
-              <button onClick={handleSaveParsed} className="px-4 py-2 rounded-md bg-green-600 text-white hover:bg-green-700">
-                Save {parseValid.length} Question(s)
+              <button onClick={handleSaveParsed} disabled={submitting} className={submitting
+                ? "px-4 py-2 rounded-md bg-green-400 text-white cursor-not-allowed"
+                : "px-4 py-2 rounded-md bg-green-600 text-white hover:bg-green-700"}>
+                {submitting ? 'Saving...' : `Save ${parseValid.length} Question(s)`}
               </button>
             )}
           </div>

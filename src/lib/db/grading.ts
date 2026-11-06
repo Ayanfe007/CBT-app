@@ -51,10 +51,19 @@ export function shouldAbandon(
 
 /**
  * Grade a session from its saved answers.
- * Compares each submitted original option letter against the question's
- * correct_option. time_taken_seconds excludes paused time.
+ * Single plain comparison: answers[questionId] === question.correct_option.
+ * No letter-to-position mapping or translation exists anywhere.
+ *
+ * @param sessionId   The session to grade.
+ * @param submitType  The submit type to record ('manual', 'auto_timeout', 'admin_forced').
+ * @param payloadAnswers  Optional answers from the client submit payload ({ questionId: letter }),
+ *                        merged with saved answers (payload takes precedence).
  */
-export async function gradeSession(sessionId: string): Promise<GradedResult | null> {
+export async function gradeSession(
+  sessionId: string,
+  submitType: string = 'manual',
+  payloadAnswers?: Record<string, string>,
+): Promise<GradedResult | null> {
   const session = await getSession(sessionId);
   if (!session) return null;
 
@@ -74,7 +83,16 @@ export async function gradeSession(sessionId: string): Promise<GradedResult | nu
 
   const questionIds = session.question_order as string[];
   const total = questionIds.length;
-  const answers = (session.answers as Record<string, { letter: string; seq: number }>) ?? {};
+
+  // Merge saved answers with payload answers (payload takes precedence).
+  const savedAnswers: Record<string, { letter: string; seq: number }> =
+    (session.answers as Record<string, { letter: string; seq: number }>) ?? {};
+  const answers: Record<string, { letter: string; seq: number }> = { ...savedAnswers };
+  if (payloadAnswers) {
+    for (const [qId, letter] of Object.entries(payloadAnswers)) {
+      answers[qId] = { letter, seq: 0 };
+    }
+  }
 
   let score = 0;
   for (const qId of questionIds) {
@@ -106,33 +124,47 @@ export async function gradeSession(sessionId: string): Promise<GradedResult | nu
     percentage,
     passed,
     timeTakenSeconds,
-    submitType: session.submit_type ?? 'manual',
+    submitType: session.submit_type ?? submitType,
     pausedSeconds: session.paused_seconds ?? 0,
     disconnectCount: session.disconnect_count ?? 0,
     answers,
     questionOrder: questionIds,
     optionOrders: (session.option_orders as Record<string, string[]>) ?? {},
-    created: false, // gradeSession alone doesn't write to DB
+    created: false,
   };
 }
 
 /**
- * Grade a session and upsert the result row into test_results.
- * Idempotent: uses ON CONFLICT (session_id) so repeated calls never duplicate.
- * Returns the graded result with `created` = true if a new row was inserted.
+ * Grade a session and atomically persist the result:
+ * 1. Upsert test_results (idempotent on session_id).
+ * 2. Mark the session submitted only after the result row is saved.
+ *
+ * This is the single function used by manual submit, auto-timeout,
+ * admin force-submit, and finalizeExpiredSessions.
  */
-export async function regradeSession(sessionId: string): Promise<GradedResult | null> {
+export async function regradeSession(
+  sessionId: string,
+  submitType?: string,
+): Promise<GradedResult | null> {
   const session = await getSession(sessionId);
   if (!session) return null;
   if (!session.submitted_at) {
     throw new Error('Session is not submitted');
   }
 
-  const graded = await gradeSession(sessionId);
+  const st = submitType ?? session.submit_type ?? 'manual';
+  const graded = await gradeSession(sessionId, st);
   if (!graded) return null;
 
+  // Check if a result already existed BEFORE upserting (for created/fixed tracking).
+  const { data: existingBefore } = await supabaseAdmin
+    .from('test_results')
+    .select('id')
+    .eq('session_id', sessionId)
+    .maybeSingle();
+
   // Upsert test_results (idempotent on session_id unique constraint).
-  const { error, count } = await supabaseAdmin
+  const { error: resultErr } = await supabaseAdmin
     .from('test_results')
     .upsert(
       {
@@ -149,21 +181,21 @@ export async function regradeSession(sessionId: string): Promise<GradedResult | 
         disconnect_count: graded.disconnectCount,
       },
       { onConflict: 'session_id' },
-    )
-    .select();
+    );
 
-  if (error) throw error;
+  if (resultErr) throw resultErr;
 
-  // count is null for upsert without returning; determine created by checking if row existed before.
-  // We already know session.submitted_at is set; if no result existed, this is a create.
-  const { data: existing } = await supabaseAdmin
-    .from('test_results')
-    .select('id')
-    .eq('session_id', sessionId)
-    .maybeSingle();
-  // If existing was null before upsert, it's a create. But we just upserted, so existing is now set.
-  // Instead, check the upsert result: if count > 0, a row was affected.
-  const wasCreated = count === null || count > 0;
+  // Mark session submitted only after result is saved.
+  if (!session.submitted_at) {
+    const { error: sessionErr } = await supabaseAdmin
+      .from('test_sessions')
+      .update({ submitted_at: new Date().toISOString(), submit_type: graded.submitType })
+      .eq('id', session.id);
+
+    if (sessionErr) throw sessionErr;
+  }
+
+  const wasCreated = !existingBefore;
 
   return { ...graded, created: wasCreated };
 }
@@ -189,7 +221,7 @@ export async function regradeAllResults(): Promise<{
   let createdCount = 0;
   let fixedCount = 0;
   let unchangedCount = 0;
-    const results: GradedResult[] = [];
+  const results: GradedResult[] = [];
 
   for (const s of sessions as any[]) {
     // Check if a result already exists.
@@ -222,11 +254,6 @@ export async function regradeAllResults(): Promise<{
 /**
  * Shared abandon check used by finalizeExpiredSessions, the dashboard,
  * the start route, the session-load route and the admin monitor.
- *
- * If a session is unsubmitted and now minus coalesce(last_heartbeat_at, started_at)
- * exceeds the course's abandon_after_minutes threshold, mark it
- * submit_type = 'abandoned' with submitted_at = now and NO test_results row.
- * Returns true if the session was abandoned.
  */
 export async function checkAndFinalizeAbandoned(session: any): Promise<boolean> {
   const course = await supabaseAdmin
@@ -281,7 +308,7 @@ export async function finalizeExpiredSessions(): Promise<{
     .from('test_sessions')
     .select('*, courses(max_pause_minutes, duration_minutes, pass_mark_percent, abandon_after_minutes)')
     .is('submitted_at', null)
-    .order('starts_at', { ascending: true });
+    .order('started_at', { ascending: true });
 
   if (!sessions) return { expired: 0, abandoned: 0, graded: 0, results: [] };
 
@@ -326,7 +353,7 @@ export async function finalizeExpiredSessions(): Promise<{
 
     expiredCount += 1;
 
-    const graded = await gradeSession(s.id);
+    const graded = await gradeSession(s.id, 'auto_timeout');
     if (!graded) continue;
 
     const submitType = 'auto_timeout';

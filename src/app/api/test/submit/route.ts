@@ -2,13 +2,12 @@ import { z } from 'zod';
 import { NextResponse } from 'next/server';
 import { verifyStudentSession } from '@/lib/auth/verify';
 import { supabaseAdmin } from '@/lib/supabase/admin';
-import { gradeSession } from '@/lib/db/grading';
+import { gradeSession, regradeSession } from '@/lib/db/grading';
 import { saveAnswers, markSubmitted } from '@/lib/db/sessions';
 
-const answerEntry = z.object({ letter: z.string().min(1), seq: z.number().int().nonnegative() });
-const schema = z.object({
+const answerEntry = z.object({
   sessionId: z.string().uuid(),
-  answers: z.record(z.string(), answerEntry),
+  answers: z.record(z.string(), z.string()), // question_id -> letter
   clientSeq: z.number().int().nonnegative().default(0),
 });
 
@@ -23,7 +22,7 @@ export async function POST(req: Request) {
     }
 
     const body = await req.json();
-    const parsed = schema.safeParse(body);
+    const parsed = answerEntry.safeParse(body);
     if (!parsed.success) {
       console.error('[/api/test/submit] validation failed. Received keys:', Object.keys(body ?? {}), parsed.error.issues);
       return NextResponse.json(
@@ -79,9 +78,16 @@ export async function POST(req: Request) {
     }
 
     // Save incoming answers (merge with existing).
+    const answersWithSeq: Record<string, { letter: string; seq: number }> = {};
+    let seq = 0;
+    for (const [qId, letter] of Object.entries(parsed.data.answers)) {
+      seq += 1;
+      answersWithSeq[qId] = { letter, seq };
+    }
+
     await saveAnswers({
       sessionId: parsed.data.sessionId,
-      answers: parsed.data.answers,
+      answers: answersWithSeq,
       clientSeq: parsed.data.clientSeq,
     });
 
@@ -92,15 +98,10 @@ export async function POST(req: Request) {
     const expired = now.getTime() > endsAt + graceMs;
 
     const submittedAt = now.toISOString();
-    const answersByLetter: Record<string, string> = {};
-    for (const [qId, entry] of Object.entries(parsed.data.answers)) {
-      answersByLetter[qId] = entry.letter;
-    }
-
     const submitType = 'manual';
 
-    // Grade first.
-    const graded = await gradeSession(parsed.data.sessionId);
+    // Grade first (uses saved answers merged with payload).
+    const graded = await gradeSession(parsed.data.sessionId, submitType, parsed.data.answers);
     if (!graded) {
       return NextResponse.json({ error: 'Could not grade session.' }, { status: 500 });
     }
@@ -138,7 +139,7 @@ export async function POST(req: Request) {
       sessionId: parsed.data.sessionId,
       submitType: submitType as 'manual',
       submittedAt,
-      answers: answersByLetter,
+      answers: parsed.data.answers,
     });
 
     return NextResponse.json({

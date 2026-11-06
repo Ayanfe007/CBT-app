@@ -23,6 +23,7 @@ export default function CoursesPage() {
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const showToast = useCallback((type: 'success' | 'error', message: string) => {
@@ -68,6 +69,7 @@ export default function CoursesPage() {
 
   async function saveCourse(e: React.FormEvent) {
     e.preventDefault();
+    setSubmitting(true);
     const body: any = {
       ...form,
       duration_minutes: Number(form.duration_minutes),
@@ -85,6 +87,7 @@ export default function CoursesPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    setSubmitting(false);
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
       setError(j.error || 'Save failed.');
@@ -95,15 +98,17 @@ export default function CoursesPage() {
     setEditing(null);
     setError('');
     load();
-    showToast('success', editing ? 'Course updated.' : 'Course created.');
+    showToast('success', editing ? 'Course updated successfully.' : 'Course created successfully.');
   }
 
   async function deleteCourse(id: string) {
     if (!window.confirm('Delete this course and all its questions/results?')) return;
+    setSubmitting(true);
     const res = await fetch(`/api/admin/courses/${id}`, { method: 'DELETE' });
+    setSubmitting(false);
     if (res.ok) {
       load();
-      showToast('success', 'Course deleted.');
+      showToast('success', 'Course deleted successfully.');
     } else {
       showToast('error', 'Delete failed.');
     }
@@ -124,9 +129,10 @@ export default function CoursesPage() {
             });
             setOpenForm(true);
           }}
-          className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
+          disabled={submitting}
+          className={submitting ? "px-4 py-2 rounded-md bg-blue-400 text-white cursor-not-allowed" : "px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"}
         >
-          + Add Course
+          {submitting ? "Submitting..." : "+ Add Course"}
         </button>
       </div>
 
@@ -189,17 +195,19 @@ export default function CoursesPage() {
                       });
                       setOpenForm(true);
                     }}
-                    className="text-xs px-2 py-1 border border-slate-300 rounded text-slate-700 hover:bg-slate-100"
-                  >
-                    Edit
-                  </button>
-                  {' '}
-                  <button
-                    onClick={() => deleteCourse(c.id)}
-                    className="text-xs px-2 py-1 border border-red-200 rounded text-red-600 hover:bg-red-50"
-                  >
-                    Delete
-                  </button>
+                      disabled={submitting}
+                      className={`text-xs px-2 py-1 border border-slate-300 rounded text-slate-700 ${submitting ? 'opacity-50 cursor-not-allowed' : 'hover:bg-slate-100'}`}
+                    >
+                      {submitting ? 'Submitting...' : 'Edit'}
+                    </button>
+                    {' '}
+                    <button
+                      onClick={() => deleteCourse(c.id)}
+                      disabled={submitting}
+                      className={`text-xs px-2 py-1 border border-red-200 rounded text-red-600 ${submitting ? 'opacity-50 cursor-not-allowed' : 'hover:bg-red-50'}`}
+                    >
+                      {submitting ? 'Submitting...' : 'Delete'}
+                    </button>
                 </td>
               </tr>
             ))}
@@ -325,8 +333,8 @@ export default function CoursesPage() {
             >
               Cancel
             </button>
-            <button type="submit" className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700">
-              {editing ? 'Update' : 'Create'}
+            <button type="submit" disabled={submitting} className={submitting ? "px-4 py-2 rounded-md bg-blue-400 text-white cursor-not-allowed" : "px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"}>
+              {submitting ? "Submitting..." : editing ? "Update" : "Create"}
             </button>
           </div>
         </form>

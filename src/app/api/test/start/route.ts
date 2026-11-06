@@ -3,9 +3,10 @@ import { NextResponse } from 'next/server';
 import { verifyStudentSession } from '@/lib/auth/verify';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { createSession } from '@/lib/db/sessions';
-import { shuffle, shuffleOptions } from '@/lib/shuffle';
+import { shuffle } from '@/lib/shuffle';
 import { finalizeExpiredSessions } from '@/lib/db/grading';
 import { startTestSchema } from '@/lib/validators';
+import { toQuestionView, orderQuestions } from '@/lib/questionView';
 
 const schema = startTestSchema;
 
@@ -68,7 +69,6 @@ export async function POST(req: Request) {
 
     const maxAttempts = assignment.attempts_override ?? course.max_attempts;
 
-    // Finalize any expired/abandoned sessions before counting attempts.
     try {
       await finalizeExpiredSessions();
     } catch {
@@ -81,7 +81,6 @@ export async function POST(req: Request) {
       .eq('student_id', studentId)
       .eq('course_id', courseId);
 
-    // Completed attempts exclude abandoned sessions (they don't consume an attempt).
     const completedCount = (sessions ?? []).filter(
       (s) => s.submitted_at && s.submit_type !== 'abandoned'
     ).length;
@@ -92,7 +91,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // Resume an in-progress (non-abandoned, unsubmitted) session.
     const inProgress = (sessions ?? []).find(
       (s) => !s.submitted_at && s.submit_type !== 'abandoned'
     );
@@ -103,30 +101,7 @@ export async function POST(req: Request) {
         .eq('course_id', courseId);
 
       const qIds = (inProgress.question_order as string[]) ?? [];
-      const qMap = new Map((questions ?? []).map((q) => [q.id, q]));
-
-      const optionOrders = (inProgress.option_orders as Record<string, string[]>) ?? {};
-      const questionsOut = qIds.map((id) => {
-        const q = qMap.get(id);
-        if (!q) return null;
-        const shuffled = optionOrders[id] ?? ['A', 'B', 'C', 'D'];
-        const letterToText: Record<string, string> = {
-          A: q.option_a,
-          B: q.option_b,
-          C: q.option_c,
-          D: q.option_d,
-        };
-        return {
-          id: q.id,
-          question_text: q.question_text,
-          options: {
-            A: letterToText[shuffled[0]],
-            B: letterToText[shuffled[1]],
-            C: letterToText[shuffled[2]],
-            D: letterToText[shuffled[3]],
-          },
-        };
-      }).filter(Boolean);
+      const questionsOut = orderQuestions(qIds, questions as any[]).map(toQuestionView);
 
       return NextResponse.json({
         sessionId: inProgress.id,
@@ -153,6 +128,7 @@ export async function POST(req: Request) {
     const questionIds = selected.map((q) => q.id);
     const shuffledQuestionIds = shuffle(questionIds);
 
+    // Options always display in original order A-D. No option shuffling.
     const optionOrders: Record<string, string[]> = {};
     const questionsOut: Array<{
       id: string;
@@ -161,32 +137,17 @@ export async function POST(req: Request) {
     }> = [];
 
     for (const q of selected) {
-      const originals = ['A', 'B', 'C', 'D'] as const;
-      const pinned = new Set<string>();
-      originals.forEach((l) => {
-        const text = (q as Record<string, string>)[`option_${l.toLowerCase()}`];
-        if (text && isPinnedOption(text)) pinned.add(l);
-      });
-
-      const { displayOrder } = shuffleOptions(
-        { A: q.option_a, B: q.option_b, C: q.option_c, D: q.option_d },
-        pinned
-      );
-      optionOrders[q.id] = displayOrder;
-
-      const displayOptions: { A: string; B: string; C: string; D: string } = {
-        A: '', B: '', C: '', D: '',
-      };
-      displayOrder.forEach((origLetter, pos) => {
-        const key = ['A', 'B', 'C', 'D'][pos] as 'A' | 'B' | 'C' | 'D';
-        const src = `option_${origLetter.toLowerCase()}`;
-        displayOptions[key] = (q as Record<string, string>)[src];
-      });
+      optionOrders[q.id] = ['A', 'B', 'C', 'D'];
 
       questionsOut.push({
         id: q.id,
         question_text: q.question_text,
-        options: displayOptions,
+        options: {
+          A: q.option_a,
+          B: q.option_b,
+          C: q.option_c,
+          D: q.option_d,
+        },
       });
     }
 

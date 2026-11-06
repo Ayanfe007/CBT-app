@@ -60,7 +60,7 @@ export interface SessionCache {
   questions: Array<{
     id: string;
     question_text: string;
-    options: { A: string; B: string; C: string; D: string };
+    options: Record<'A' | 'B' | 'C' | 'D', string>;
   }>;
 }
 

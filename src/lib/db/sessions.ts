@@ -1,18 +1,11 @@
 import { supabaseAdmin } from '@/lib/supabase/admin';
 
-export interface QuestionOption {
-  A: string;
-  B: string;
-  C: string;
-  D: string;
-}
-
 export interface TestSession {
   id: string;
   student_id: string;
   course_id: string;
   question_order: string[];
-  option_orders: Record<string, string[]>;
+  option_orders: Record<string, string[]>; // unused; kept for schema compatibility
   answers: Record<string, { letter: string; seq: number }>;
   started_at: string | null;
   ends_at: string | null;
@@ -180,16 +173,21 @@ export async function markSubmitted(input: {
   sessionId: string;
   submitType: SubmitType;
   submittedAt: string;
-  answers: Record<string, string>;
+  answers: Record<string, string>; // question_id -> letter
 }) {
+  const answersWithSeq: Record<string, { letter: string; seq: number }> = {};
+  let seq = 0;
+  for (const [qId, letter] of Object.entries(input.answers)) {
+    seq += 1;
+    answersWithSeq[qId] = { letter, seq };
+  }
+
   const { error } = await supabaseAdmin
     .from('test_sessions')
     .update({
       submitted_at: input.submittedAt,
       submit_type: input.submitType,
-      answers: Object.fromEntries(
-        Object.entries(input.answers).map(([qId, letter]) => [qId, { letter, seq: 0 }])
-      ),
+      answers: answersWithSeq,
     } as any)
     .eq('id', input.sessionId);
 

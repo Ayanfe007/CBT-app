@@ -30,7 +30,7 @@ interface SessionResponse {
   serverNow: string | null;
   questions: Question[];
   questionOrder: string[];
-  optionOrders: Record<string, string[]>;
+  optionOrders?: Record<string, string[]>;
   submittedAt: string | null;
   answers: Record<string, string>;
   pausedSeconds: number;
@@ -77,9 +77,8 @@ export default function TestPage() {
   let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingDirty = false;
   let seq = 0;
-  let loaded = false; // first successful load guard
+  let loaded = false;
 
-  // ---------------- Load session ----------------
   useEffect(() => {
     if (!sessionId || sessionId === 'new') {
       setStatus('load-failed');
@@ -145,7 +144,6 @@ export default function TestPage() {
         return;
       }
 
-      // Finished session (submitted, auto-timed-out, or abandoned).
       if (serverData.status === 'finished' || serverData.submittedAt) {
         setStatus('finished');
         if (serverData.resultId) {
@@ -193,7 +191,6 @@ export default function TestPage() {
     };
   }, [sessionId, router]);
 
-  // ---------------- Online/offline detection ----------------
   useEffect(() => {
     const onOnline = () => {
       setIsPaused(false);
@@ -217,7 +214,6 @@ export default function TestPage() {
     };
   }, [status]);
 
-  // ---------------- Timer ----------------
   const syncTimer = useCallback((endsAt: string, serverNow?: string) => {
     serverEndsAtRef.current = endsAt;
     if (serverNow) {
@@ -234,7 +230,6 @@ export default function TestPage() {
     return Math.max(0, rem);
   }, []);
 
-  // ---------------- Heartbeat ----------------
   async function doHeartbeat() {
     if (!sessionId || sessionId === 'new') return;
     try {
@@ -269,7 +264,6 @@ export default function TestPage() {
     heartbeatTimer = null;
   }
 
-  // ---------------- Tick ----------------
   function startTick() {
     stopTick();
     tickTimer = setInterval(() => {
@@ -288,7 +282,6 @@ export default function TestPage() {
     tickTimer = null;
   }
 
-  // ---------------- Autosave ----------------
   const markDirty = useCallback(() => {
     pendingDirty = true;
     if (autosaveTimer) clearTimeout(autosaveTimer);
@@ -344,7 +337,6 @@ export default function TestPage() {
     }
   }
 
-  // ---------------- Answer selection ----------------
   function selectOption(letter: OptionLetter) {
     if (isPaused || status === 'submitting' || status === 'submitted') return;
     const qId = questions[currentIndex]?.id;
@@ -367,9 +359,8 @@ export default function TestPage() {
     markDirty();
   }
 
-  // ---------------- Submit ----------------
   async function autoSubmit() {
-    if (!loaded) return; // never auto-submit before first successful load
+    if (!loaded) return;
     setStatus('submitting');
     setSubmitMessage('Time is up — submitting your test automatically…');
     await finalSubmit('auto_timeout');
@@ -391,11 +382,6 @@ export default function TestPage() {
     await finalSubmit('manual');
   }
 
-  /**
-   * Cancel Test: submit the current answers and return to dashboard.
-   * Students cannot cancel and restart for a fresh shuffle — this submits
-   * whatever they've answered so far.
-   */
   async function handleCancelTest() {
     if (status === 'submitting' || status === 'submitted') return;
     if (
@@ -416,9 +402,9 @@ export default function TestPage() {
     setIsSubmitting(true);
     const submitDeadline = Date.now() + SUBMIT_TIMEOUT_MS;
 
-    const flatAnswers: Record<string, { letter: string; seq: number }> = {};
-    Object.entries(answers).forEach(([qId, letter], i) => {
-      flatAnswers[qId] = { letter, seq: i + 1 };
+    const flatAnswers: Record<string, string> = {};
+    Object.entries(answers).forEach(([qId, letter]) => {
+      flatAnswers[qId] = letter;
     });
 
     const trySubmit = async (): Promise<Response | null> => {
@@ -429,14 +415,12 @@ export default function TestPage() {
           body: JSON.stringify({ sessionId, answers: flatAnswers, clientSeq: seq }),
         });
       } catch {
-        return null; // network failure
+        return null;
       }
     };
 
     let lastErr: Error | null = null;
 
-    // Retry only on real network failures (fetch throws or times out).
-    // On any HTTP error status, stop and show the server's message.
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const res = await trySubmit();
       if (!res) {
@@ -463,20 +447,17 @@ export default function TestPage() {
         return;
       }
 
-      // HTTP error — stop retrying, show server message.
       const errJson = await res.json().catch(() => ({}));
       lastErr = new Error(errJson.error || `Submit failed (${res.status})`);
       break;
     }
 
-    // Show error + Retry button. Never stay on "Submitting..." past the deadline.
     setStatus('active');
     setSubmitError(lastErr?.message || 'Submit failed. Please try again.');
     setSubmitMessage('');
     setIsSubmitting(false);
 
     if (Date.now() <= submitDeadline) {
-      // Background retry every 10s until deadline
       const retry = setInterval(async () => {
         if (Date.now() > submitDeadline) {
           clearInterval(retry);
@@ -503,7 +484,6 @@ export default function TestPage() {
     }
   }
 
-  // ---------------- Fetch with timeout ----------------
   async function fetchWithTimeout(url: string, opts: RequestInit) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -515,7 +495,6 @@ export default function TestPage() {
     }
   }
 
-  // ---------------- Persist on beforeunload ----------------
   useEffect(() => {
     const onBeforeUnload = () => {
       Object.entries(answers).forEach(([qId, letter], i) => {
@@ -538,7 +517,6 @@ export default function TestPage() {
     };
   }, [sessionId, answers]);
 
-  // ---------------- Keyboard shortcuts ----------------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (isPaused || status === 'submitting' || status === 'submitted') return;
@@ -562,7 +540,6 @@ export default function TestPage() {
     };
   }, [questions, isPaused, status]);
 
-  // ---------------- Render helpers ----------------
   const mins = Math.floor(timeRemaining / 60);
   const secs = timeRemaining % 60;
   const isCritical = timeRemaining <= 5 * 60;
@@ -585,8 +562,6 @@ export default function TestPage() {
       ? 'w-8 h-8 rounded-full text-xs font-semibold bg-green-100 text-green-700 border border-green-300'
       : 'w-8 h-8 rounded-full text-xs font-semibold bg-white border border-slate-300 text-slate-600 hover:bg-slate-50';
 
-  // ---------------- Render ----------------
-  // Loading skeleton
   if (status === 'loading') {
     return (
       <div className="min-h-screen bg-slate-50 p-4">
@@ -611,7 +586,6 @@ export default function TestPage() {
     );
   }
 
-  // Load failed
   if (status === 'load-failed') {
     return (
       <div className="min-h-screen bg-slate-50 p-4 flex items-center justify-center">
@@ -641,7 +615,6 @@ export default function TestPage() {
     );
   }
 
-  // Finished (submitted / timed out / abandoned)
   if (status === 'finished') {
     return (
       <div className="min-h-screen bg-slate-50 p-4 flex items-center justify-center">
@@ -678,7 +651,6 @@ export default function TestPage() {
   return (
     <div className="min-h-screen bg-slate-50 p-4">
       <div className="max-w-3xl mx-auto">
-        {/* Header + timer */}
         <div className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-lg font-bold text-slate-900">
@@ -718,7 +690,6 @@ export default function TestPage() {
           </div>
         )}
 
-        {/* Offline pause overlay */}
         {isPaused && status === 'active' && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/90 backdrop-blur-sm">
             <div className="bg-white rounded-lg p-6 max-w-md w-full shadow-xl text-center">
@@ -738,7 +709,6 @@ export default function TestPage() {
           </div>
         )}
 
-        {/* Question card */}
         <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm mb-6">
           <div className="text-lg text-slate-800 mb-6 leading-relaxed">
             {currentIndex + 1}.{' '}
@@ -765,7 +735,6 @@ export default function TestPage() {
           </div>
         </div>
 
-        {/* Question grid */}
         <div className="mb-6">
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
             Question grid (click to jump)
@@ -788,7 +757,6 @@ export default function TestPage() {
           </div>
         </div>
 
-        {/* Navigation */}
         <div className="flex items-center justify-between">
           <button
             onClick={() =>
