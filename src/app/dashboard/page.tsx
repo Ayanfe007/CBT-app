@@ -54,6 +54,7 @@ export default async function DashboardPage() {
   for (const a of (assignments ?? [])) {
     const course = (a as any).courses;
     if (!course) continue;
+    const maxAttempts = (a as any).attempts_override ?? course.max_attempts ?? 1;
 
     const { data: sessions } = await supabaseAdmin
       .from('test_sessions')
@@ -67,8 +68,12 @@ export default async function DashboardPage() {
       submit_type: string | null;
     }>;
 
-    const submitted = sessionList.filter((s) => s.submitted_at);
-    const inProgress = sessionList.find((s) => !s.submitted_at);
+    const submitted = sessionList.filter(
+      (s) => s.submitted_at && s.submit_type !== 'abandoned'
+    );
+    const inProgress = sessionList.find(
+      (s) => !s.submitted_at && s.submit_type !== 'abandoned'
+    );
 
     let status: CourseWithStatus['status'] = 'not_started';
     let score: number | null = null;
@@ -79,7 +84,9 @@ export default async function DashboardPage() {
 
     if (submitted.length > 0) {
       status = 'completed';
-      const latest = submitted[submitted.length - 1];
+      const latest = [...submitted].sort(
+        (x, y) => new Date(y.submitted_at ?? 0).getTime() - new Date(x.submitted_at ?? 0).getTime()
+      )[0];
       sessionId = latest.id;
       submit_type = latest.submit_type;
       const { data: result } = await supabaseAdmin
@@ -107,7 +114,7 @@ export default async function DashboardPage() {
       is_active: course.is_active,
       show_result_to_student: course.show_result_to_student,
       show_review_to_student: course.show_review_to_student,
-      max_attempts: course.max_attempts,
+      max_attempts: maxAttempts,
       attempts_used: submitted.length,
       status,
       sessionId,
@@ -197,6 +204,12 @@ export default async function DashboardPage() {
                 >
                   View Result {c.percentage != null ? `— ${c.percentage}%` : ''}
                 </a>
+              )}
+              {c.status === 'completed' && c.attempts_used < c.max_attempts && c.is_active && (
+                <CourseStartButton
+                  course={c}
+                  label={`Retake Test — Attempt ${c.attempts_used + 1} of ${c.max_attempts}`}
+                />
               )}
               {c.status === 'completed' && c.show_result_to_student === false && (
                 <p className="text-sm text-slate-500">

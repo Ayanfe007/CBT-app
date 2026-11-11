@@ -71,7 +71,6 @@ export async function POST(req: Request) {
               disconnectCount: result.disconnect_count ?? 0,
               answers: {},
               questionOrder: [],
-              optionOrders: {},
             }
           : null,
       });

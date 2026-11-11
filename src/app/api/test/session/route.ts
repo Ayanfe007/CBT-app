@@ -3,7 +3,12 @@ import { verifyStudentSession } from '@/lib/auth/verify';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { finalizeExpiredSessions } from '@/lib/db/grading';
 import { markAbandoned } from '@/lib/db/sessions';
-import { toQuestionView, orderQuestions, type QuestionView } from '@/lib/questionView';
+
+interface QuestionOut {
+  id: string;
+  question_text: string;
+  options: { A: string; B: string; C: string; D: string };
+}
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,7 +34,7 @@ export async function GET(req: Request) {
 
     const { data: session, error: fetchErr } = await supabaseAdmin
       .from('test_sessions')
-      .select('*')
+      .select('id, student_id, submit_type, submitted_at, course_id, last_heartbeat_at, started_at, question_order, ends_at, answers, paused_seconds')
       .eq('id', sessionId)
       .maybeSingle();
 
@@ -90,10 +95,23 @@ export async function GET(req: Request) {
       .in('id', questionOrder)
       .order('created_at');
 
-    // Options always display A-D exactly as the admin entered them.
-    const questionsOut: QuestionView[] = orderQuestions(questionOrder, questions as any[]).map(
-      toQuestionView,
-    );
+    const qMap = new Map((questions as any[] | null)?.map((q) => [q.id, q]) ?? []);
+
+    // Options always display in original order A-D = option_a-d. No option shuffling.
+    const questionsOut: QuestionOut[] = questionOrder.map((id) => {
+      const q = qMap.get(id);
+      if (!q) return null;
+      return {
+        id: q.id,
+        question_text: q.question_text,
+        options: {
+          A: q.option_a ?? '',
+          B: q.option_b ?? '',
+          C: q.option_c ?? '',
+          D: q.option_d ?? '',
+        },
+      };
+    }).filter(Boolean) as QuestionOut[];
 
     // Convert answers from { letter, seq } to flat letter map.
     const rawAnswers = (session.answers as Record<string, { letter: string }> | null) ?? {};

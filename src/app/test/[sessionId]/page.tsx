@@ -30,7 +30,6 @@ interface SessionResponse {
   serverNow: string | null;
   questions: Question[];
   questionOrder: string[];
-  optionOrders?: Record<string, string[]>;
   submittedAt: string | null;
   answers: Record<string, string>;
   pausedSeconds: number;

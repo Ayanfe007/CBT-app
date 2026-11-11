@@ -5,7 +5,6 @@ export interface TestSession {
   student_id: string;
   course_id: string;
   question_order: string[];
-  option_orders: Record<string, string[]>; // unused; kept for schema compatibility
   answers: Record<string, { letter: string; seq: number }>;
   started_at: string | null;
   ends_at: string | null;
@@ -24,7 +23,6 @@ export async function createSession(input: {
   studentId: string;
   courseId: string;
   questionOrder: string[];
-  optionOrders: Record<string, string[]>;
   endsAt: string;
 }) {
   const { data, error } = await supabaseAdmin
@@ -33,7 +31,6 @@ export async function createSession(input: {
       student_id: input.studentId,
       course_id: input.courseId,
       question_order: input.questionOrder,
-      option_orders: input.optionOrders,
       answers: {},
       started_at: new Date().toISOString(),
       ends_at: input.endsAt,
@@ -48,7 +45,7 @@ export async function createSession(input: {
 export async function getSession(sessionId: string): Promise<TestSession | null> {
   const { data, error } = await supabaseAdmin
     .from('test_sessions')
-    .select('*')
+    .select('id, student_id, course_id, question_order, answers, started_at, ends_at, submitted_at, submit_type, tab_switch_count, last_heartbeat_at, paused_seconds, disconnect_count, last_client_seq')
     .eq('id', sessionId)
     .maybeSingle();
 

@@ -2,6 +2,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin';
 import { verifyStudentSession } from '@/lib/auth/verify';
 import { gradeSession } from '@/lib/db/grading';
 import { redirect } from 'next/navigation';
+import CourseStartButton from '@/app/dashboard/course-start-button';
 
 interface ReviewItem {
   questionNumber: number;
@@ -23,7 +24,7 @@ export default async function ResultPage({
 
   const { data: session, error: fetchErr } = await supabaseAdmin
     .from('test_sessions')
-    .select('*, courses(*)')
+    .select('id, student_id, course_id, question_order, answers, submitted_at, submit_type, courses(*)')
     .eq('id', sessionId)
     .maybeSingle();
 
@@ -42,6 +43,35 @@ export default async function ResultPage({
   if (!s.submitted_at) {
     redirect(`/test/${sessionId}`);
   }
+
+  // Count completed (non-abandoned) attempts for this student + course to determine retake eligibility.
+  const { data: allSessions } = await supabaseAdmin
+    .from('test_sessions')
+    .select('id, submitted_at, submit_type')
+    .eq('student_id', student.studentId)
+    .eq('course_id', s.course_id);
+
+  const completedAttempts = (allSessions ?? []).filter(
+    (x: any) => x.submitted_at && x.submit_type !== 'abandoned'
+  ).length;
+  const { data: assignment } = await supabaseAdmin
+    .from('course_assignments')
+    .select('attempts_override')
+    .eq('student_id', student.studentId)
+    .eq('course_id', s.course_id)
+    .maybeSingle();
+  const maxAttempts = assignment?.attempts_override ?? course.max_attempts ?? 1;
+  const canRetake =
+    completedAttempts < maxAttempts && course.is_active && s.submit_type !== 'abandoned';
+  const retakeCourse = {
+    id: course.id,
+    course_code: course.course_code,
+    title: course.title,
+    status: 'completed' as const,
+    is_active: course.is_active,
+    attempts_used: completedAttempts,
+    max_attempts: maxAttempts,
+  };
 
   let { data: result, error: resultErr } = await supabaseAdmin
     .from('test_results')
@@ -81,14 +111,12 @@ export default async function ResultPage({
           Could not load result
         </h2>
         <p className="text-slate-600 mb-4">{resultErr?.message || 'Unknown error'}</p>
-        <button
-          onClick={() => {
-            window.location.reload();
-          }}
-          className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
+        <a
+          href={`/result/${sessionId}`}
+          className="inline-block px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
         >
           Retry
-        </button>
+        </a>
       </div>
     );
   }
@@ -114,10 +142,10 @@ export default async function ResultPage({
         questionNumber: idx + 1,
         questionText: q.question_text,
         options: {
-          A: q.option_a,
-          B: q.option_b,
-          C: q.option_c,
-          D: q.option_d,
+          A: q.option_a ?? '',
+          B: q.option_b ?? '',
+          C: q.option_c ?? '',
+          D: q.option_d ?? '',
         },
         studentAnswer,
         correctAnswer,
@@ -148,6 +176,15 @@ export default async function ResultPage({
           <p className="text-slate-600">
             Your result has been recorded. Thank you for taking the test.
           </p>
+        </div>
+      )}
+
+      {!showResult && canRetake && (
+        <div className="mt-6 max-w-3xl mx-auto">
+          <CourseStartButton
+            course={retakeCourse}
+            label={`Retake Test — Attempt ${completedAttempts + 1} of ${maxAttempts}`}
+          />
         </div>
       )}
 
@@ -207,6 +244,18 @@ export default async function ResultPage({
             )}
           </div>
 
+          {showResult && canRetake && (
+            <div className="mb-6">
+              <CourseStartButton
+                course={retakeCourse}
+                label={`Retake Test — Attempt ${completedAttempts + 1} of ${maxAttempts}`}
+              />
+              <p className="mt-2 text-sm text-slate-500 text-center">
+                You can start your next attempt now.
+              </p>
+            </div>
+          )}
+
           {showReview && review && (
             <div>
               <h3 className="text-lg font-bold text-slate-900 mb-4">
@@ -263,6 +312,7 @@ export default async function ResultPage({
           )}
         </div>
       )}
+
     </div>
   );
 }

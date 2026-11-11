@@ -6,21 +6,8 @@ import { createSession } from '@/lib/db/sessions';
 import { shuffle } from '@/lib/shuffle';
 import { finalizeExpiredSessions } from '@/lib/db/grading';
 import { startTestSchema } from '@/lib/validators';
-import { toQuestionView, orderQuestions } from '@/lib/questionView';
 
 const schema = startTestSchema;
-
-function isPinnedOption(text: string): boolean {
-  const t = text.toLowerCase().trim();
-  return (
-    t.includes('all of the above') ||
-    t.includes('none of the above') ||
-    t.includes('all of these') ||
-    t.includes('none of these') ||
-    /^both\s+a\s*(and|&)\s+b/.test(t) ||
-    /^both\s+a\s*(and|&)\s+b\s+and\s+c/.test(t)
-  );
-}
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -77,7 +64,7 @@ export async function POST(req: Request) {
 
     const { data: sessions } = await supabaseAdmin
       .from('test_sessions')
-      .select('id, submitted_at, submit_type, question_order, option_orders, ends_at')
+      .select('id, submitted_at, submit_type, question_order, ends_at')
       .eq('student_id', studentId)
       .eq('course_id', courseId);
 
@@ -101,7 +88,22 @@ export async function POST(req: Request) {
         .eq('course_id', courseId);
 
       const qIds = (inProgress.question_order as string[]) ?? [];
-      const questionsOut = orderQuestions(qIds, questions as any[]).map(toQuestionView);
+      const qMap = new Map((questions ?? []).map((q) => [q.id, q]));
+
+      const questionsOut = qIds.map((id) => {
+        const q = qMap.get(id);
+        if (!q) return null;
+        return {
+          id: q.id,
+          question_text: q.question_text,
+          options: {
+            A: q.option_a ?? '',
+            B: q.option_b ?? '',
+            C: q.option_c ?? '',
+            D: q.option_d ?? '',
+          },
+        };
+      }).filter(Boolean);
 
       return NextResponse.json({
         sessionId: inProgress.id,
@@ -129,27 +131,20 @@ export async function POST(req: Request) {
     const shuffledQuestionIds = shuffle(questionIds);
 
     // Options always display in original order A-D. No option shuffling.
-    const optionOrders: Record<string, string[]> = {};
     const questionsOut: Array<{
       id: string;
       question_text: string;
       options: { A: string; B: string; C: string; D: string };
-    }> = [];
-
-    for (const q of selected) {
-      optionOrders[q.id] = ['A', 'B', 'C', 'D'];
-
-      questionsOut.push({
-        id: q.id,
-        question_text: q.question_text,
-        options: {
-          A: q.option_a,
-          B: q.option_b,
-          C: q.option_c,
-          D: q.option_d,
-        },
-      });
-    }
+    }> = selected.map((q) => ({
+      id: q.id,
+      question_text: q.question_text,
+      options: {
+        A: q.option_a ?? '',
+        B: q.option_b ?? '',
+        C: q.option_c ?? '',
+        D: q.option_d ?? '',
+      },
+    }));
 
     const qOutMap = new Map(questionsOut.map((q) => [q.id, q]));
     const finalQuestions = shuffledQuestionIds.map((id) => qOutMap.get(id)!).filter(Boolean);
@@ -161,7 +156,6 @@ export async function POST(req: Request) {
       studentId,
       courseId,
       questionOrder: shuffledQuestionIds,
-      optionOrders,
       endsAt,
     });
 

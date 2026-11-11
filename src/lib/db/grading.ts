@@ -15,7 +15,6 @@ export interface GradedResult {
   disconnectCount: number;
   answers: Record<string, { letter: string; seq: number }>;
   questionOrder: string[];
-  optionOrders: Record<string, string[]>;
   created: boolean; // true if a new test_results row was inserted, false if updated existing
 }
 
@@ -129,7 +128,6 @@ export async function gradeSession(
     disconnectCount: session.disconnect_count ?? 0,
     answers,
     questionOrder: questionIds,
-    optionOrders: (session.option_orders as Record<string, string[]>) ?? {},
     created: false,
   };
 }
@@ -308,7 +306,7 @@ export async function finalizeExpiredSessions(): Promise<{
     .from('test_sessions')
     .select('*, courses(max_pause_minutes, duration_minutes, pass_mark_percent, abandon_after_minutes)')
     .is('submitted_at', null)
-    .order('started_at', { ascending: true });
+    .order('starts_at', { ascending: true });
 
   if (!sessions) return { expired: 0, abandoned: 0, graded: 0, results: [] };
 

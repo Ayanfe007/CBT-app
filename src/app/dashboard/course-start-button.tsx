@@ -14,9 +14,10 @@ interface CourseStartButtonProps {
     attempts_used: number;
     max_attempts: number;
   };
+  label?: string;
 }
 
-export default function CourseStartButton({ course }: CourseStartButtonProps) {
+export default function CourseStartButton({ course, label }: CourseStartButtonProps) {
   const router = useRouter();
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState('');
@@ -63,7 +64,9 @@ export default function CourseStartButton({ course }: CourseStartButtonProps) {
     }
   }, [course.id, router]);
 
-  const label = course.status === 'in_progress' ? 'Resume Test' : 'Start Test';
+  const defaultLabel =
+    course.status === 'in_progress' ? 'Resume Test' : 'Start Test';
+  const buttonLabel = label ?? defaultLabel;
 
   return (
     <div className="space-y-2">
@@ -72,7 +75,7 @@ export default function CourseStartButton({ course }: CourseStartButtonProps) {
         disabled={starting}
         className="w-full py-3 px-4 rounded-lg bg-blue-600 text-white font-semibold text-center hover:bg-blue-700 disabled:opacity-60 transition"
       >
-        {starting ? 'Starting…' : label}
+        {starting ? 'Starting…' : buttonLabel}
       </button>
       {startError && (
         <div className="mt-2 p-2 rounded bg-red-50 text-red-700 text-sm border border-red-100">
