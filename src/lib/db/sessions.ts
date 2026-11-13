@@ -1,11 +1,12 @@
 import { supabaseAdmin } from '@/lib/supabase/admin';
+import { normalizeStoredAnswers, type OptionLetter } from '@/lib/answers';
 
 export interface TestSession {
   id: string;
   student_id: string;
   course_id: string;
   question_order: string[];
-  answers: Record<string, { letter: string; seq: number }>;
+  answers: Record<string, { letter: string; seq: number } | string>;
   started_at: string | null;
   ends_at: string | null;
   submitted_at: string | null;
@@ -55,14 +56,13 @@ export async function getSession(sessionId: string): Promise<TestSession | null>
 
 export async function saveAnswers(input: {
   sessionId: string;
-  answers: Record<string, { letter: string; seq: number }>;
+  answers: Record<string, { letter: OptionLetter; seq: number }>;
   clientSeq: number;
 }) {
   const session = await getSession(input.sessionId);
   if (!session) throw new Error('Session not found');
 
-  const existing: Record<string, { letter: string; seq: number }> =
-    (session.answers as Record<string, { letter: string; seq: number }>) ?? {};
+  const existing = normalizeStoredAnswers(session.answers);
 
   let maxSeq = session.last_client_seq ?? 0;
   let changed = false;

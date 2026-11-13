@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { verifyStudentSession } from '@/lib/auth/verify';
 import { gradeSession } from '@/lib/db/grading';
+import { classifyStoredAnswer, normalizeStoredAnswers } from '@/lib/answers';
 import { redirect } from 'next/navigation';
 import CourseStartButton from '@/app/dashboard/course-start-button';
 
@@ -9,7 +10,8 @@ interface ReviewItem {
   questionText: string;
   options: { A: string; B: string; C: string; D: string };
   studentAnswer: string | null;
-  correctAnswer: string;
+  correctAnswer: string | null;
+  answerStatus: 'correct' | 'incorrect' | 'unanswered' | 'unrecognized';
   isCorrect: boolean;
 }
 
@@ -130,14 +132,26 @@ export default async function ResultPage({
       .order('created_at');
 
     const questionOrder = (s.question_order as string[]) ?? [];
-    const answers = (s.answers as Record<string, { letter: string }> | null) ?? {};
+    const rawAnswers =
+      s.answers && typeof s.answers === 'object' && !Array.isArray(s.answers)
+        ? s.answers as Record<string, unknown>
+        : {};
+    const answers = normalizeStoredAnswers(rawAnswers);
     const qMap = new Map((questions as any[] | null)?.map((q) => [q.id, q]) ?? []);
 
     review = questionOrder.map((qId: string, idx: number) => {
       const q = qMap.get(qId);
       if (!q) return null;
       const studentAnswer = answers[qId]?.letter ?? null;
-      const correctAnswer = q.correct_option;
+      const correctAnswer = q.correct_option ?? null;
+      const rawKind = classifyStoredAnswer(rawAnswers[qId]);
+      const answerStatus = rawKind === 'unrecognized'
+        ? 'unrecognized'
+        : rawKind === 'missing'
+          ? 'unanswered'
+          : studentAnswer === correctAnswer
+            ? 'correct'
+            : 'incorrect';
       return {
         questionNumber: idx + 1,
         questionText: q.question_text,
@@ -149,11 +163,15 @@ export default async function ResultPage({
         },
         studentAnswer,
         correctAnswer,
-        isCorrect: studentAnswer === correctAnswer,
+        answerStatus,
+        isCorrect: answerStatus === 'correct',
       };
     }).filter(Boolean) as ReviewItem[];
   }
 
+  const answeredCount = review?.filter((item) => item.answerStatus === 'correct' || item.answerStatus === 'incorrect').length ?? 0;
+  const unrecognizedCount = review?.filter((item) => item.answerStatus === 'unrecognized').length ?? 0;
+  const unansweredCount = review?.filter((item) => item.answerStatus === 'unanswered').length ?? 0;
   const percentage = result ? Number(result.percentage) : 0;
   const passed = result ? result.passed : false;
 
@@ -258,9 +276,19 @@ export default async function ResultPage({
 
           {showReview && review && (
             <div>
-              <h3 className="text-lg font-bold text-slate-900 mb-4">
+              <h3 className="text-lg font-bold text-slate-900 mb-1">
                 Question-by-question review
               </h3>
+              <p className="text-sm text-slate-500 mb-4">
+                Answers identified: {answeredCount} / {review.length}
+                {unansweredCount > 0 && ` · ${unansweredCount} unanswered`}
+                {unrecognizedCount > 0 && ` · ${unrecognizedCount} saved in an older format and need admin review`}
+              </p>
+              {unrecognizedCount > 0 && (
+                <div className="mb-4 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                  Some saved responses use an older format that cannot be matched safely to A–D. The score for this attempt may need administrator review.
+                </div>
+              )}
               <div className="space-y-4">
                 {review.map((item) => (
                   <div
@@ -273,13 +301,28 @@ export default async function ResultPage({
                       </span>
                       <span
                         className={`text-xs font-bold px-2 py-0.5 rounded ${
-                          item.isCorrect ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                          item.answerStatus === 'unanswered' || item.answerStatus === 'unrecognized'
+                            ? 'bg-amber-100 text-amber-700'
+                            : item.isCorrect
+                              ? 'bg-green-100 text-green-700'
+                              : 'bg-red-100 text-red-700'
                         }`}
                       >
-                        {item.isCorrect ? 'Correct' : 'Incorrect'}
+                        {item.answerStatus === 'unrecognized'
+                          ? 'Legacy answer'
+                          : item.answerStatus === 'unanswered'
+                            ? 'Unanswered'
+                            : item.isCorrect
+                              ? 'Correct'
+                              : 'Incorrect'}
                       </span>
                     </div>
                     <div className="text-slate-800 mb-3">{item.questionText}</div>
+                    {item.answerStatus === 'unrecognized' && (
+                      <p className="text-xs text-amber-700 mb-3">
+                        A saved response exists, but its old format cannot be safely identified as A, B, C, or D.
+                      </p>
+                    )}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
                       {(['A', 'B', 'C', 'D'] as const).map((letter) => {
                         const isStudent = item.studentAnswer === letter;
@@ -297,9 +340,11 @@ export default async function ResultPage({
                           >
                             <span className="font-mono font-bold mr-1">{letter}</span>{' '}
                             {item.options[letter]}
-                            {isCorrect && <span className="ml-2 text-green-600 text-xs">✓</span>}
-                            {isStudent && !isCorrect && (
-                              <span className="ml-2 text-red-600 text-xs">your answer</span>
+                            {isCorrect && <span className="ml-2 text-green-600 text-xs">✓ correct</span>}
+                            {isStudent && (
+                              <span className={`ml-2 text-xs ${isCorrect ? 'text-green-700' : 'text-red-600'}`}>
+                                your answer
+                              </span>
                             )}
                           </div>
                         );

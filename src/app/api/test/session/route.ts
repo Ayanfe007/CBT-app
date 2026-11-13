@@ -3,6 +3,7 @@ import { verifyStudentSession } from '@/lib/auth/verify';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { finalizeExpiredSessions } from '@/lib/db/grading';
 import { markAbandoned } from '@/lib/db/sessions';
+import { normalizeStoredAnswers } from '@/lib/answers';
 
 interface QuestionOut {
   id: string;
@@ -113,11 +114,11 @@ export async function GET(req: Request) {
       };
     }).filter(Boolean) as QuestionOut[];
 
-    // Convert answers from { letter, seq } to flat letter map.
-    const rawAnswers = (session.answers as Record<string, { letter: string }> | null) ?? {};
+    // Return a flat letter map whether persisted answers are current objects or legacy strings.
+    const normalizedAnswers = normalizeStoredAnswers(session.answers);
     const answers: Record<string, string> = {};
-    Object.entries(rawAnswers).forEach(([qId, v]) => {
-      answers[qId] = v.letter;
+    Object.entries(normalizedAnswers).forEach(([qId, answer]) => {
+      answers[qId] = answer.letter;
     });
 
     return NextResponse.json({

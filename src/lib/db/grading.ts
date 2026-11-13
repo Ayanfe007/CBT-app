@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { getSession } from './sessions';
+import { getAnswerLetter, normalizeStoredAnswers } from '@/lib/answers';
 
 export interface GradedResult {
   sessionId: string;
@@ -84,12 +85,12 @@ export async function gradeSession(
   const total = questionIds.length;
 
   // Merge saved answers with payload answers (payload takes precedence).
-  const savedAnswers: Record<string, { letter: string; seq: number }> =
-    (session.answers as Record<string, { letter: string; seq: number }>) ?? {};
-  const answers: Record<string, { letter: string; seq: number }> = { ...savedAnswers };
+  // Normalize older flat-letter values so a saved 'A' is not treated as missing.
+  const answers = normalizeStoredAnswers(session.answers);
   if (payloadAnswers) {
-    for (const [qId, letter] of Object.entries(payloadAnswers)) {
-      answers[qId] = { letter, seq: 0 };
+    for (const [qId, rawLetter] of Object.entries(payloadAnswers)) {
+      const letter = getAnswerLetter(rawLetter);
+      if (letter) answers[qId] = { letter, seq: 0 };
     }
   }
 

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { verifyAdminSession } from '@/lib/auth/verify';
 import { supabaseAdmin } from '@/lib/supabase/admin';
+import { classifyStoredAnswer, normalizeStoredAnswers } from '@/lib/answers';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -45,28 +46,35 @@ export async function GET(
     if (questionsErr) throw questionsErr;
 
     const questionOrder = (session.question_order as string[] | null) ?? [];
-    const answers = (session.answers as Record<string, { letter?: string } | string> | null) ?? {};
+    const rawAnswerMap =
+      session.answers && typeof session.answers === 'object' && !Array.isArray(session.answers)
+        ? session.answers as Record<string, unknown>
+        : {};
+    const answers = normalizeStoredAnswers(rawAnswerMap);
     const qMap = new Map((questions ?? []).map((q) => [q.id, q]));
 
     const breakdown = questionOrder.flatMap((qId: string, idx: number) => {
       const q = qMap.get(qId);
       if (!q) return [];
 
-      const savedAnswer = answers[qId];
-      const studentAnswer =
-        typeof savedAnswer === 'string'
-          ? savedAnswer
-          : typeof savedAnswer?.letter === 'string'
-            ? savedAnswer.letter
-            : null;
+      const studentAnswer = answers[qId]?.letter ?? null;
       const correctAnswer = q.correct_option ?? null;
+      const rawKind = classifyStoredAnswer(rawAnswerMap[qId]);
+      const answerStatus = rawKind === 'unrecognized'
+        ? 'unrecognized'
+        : rawKind === 'missing'
+          ? 'unanswered'
+          : studentAnswer === correctAnswer
+            ? 'correct'
+            : 'incorrect';
 
       return [{
         questionNumber: idx + 1,
         questionText: q.question_text ?? '',
         studentAnswer,
         correctAnswer,
-        isCorrect: studentAnswer !== null && studentAnswer === correctAnswer,
+        answerStatus,
+        isCorrect: answerStatus === 'correct',
         // Always show choices as entered: A-D map directly to option_a-option_d.
         options: {
           A: q.option_a ?? '',
@@ -77,7 +85,20 @@ export async function GET(
       }];
     });
 
-    return NextResponse.json({ result, breakdown });
+    const questionIdSet = new Set(questionOrder);
+    const savedAnswerKeys = Object.keys(rawAnswerMap);
+    const answered = breakdown.filter((item) => item.answerStatus === 'correct' || item.answerStatus === 'incorrect').length;
+    const unanswered = breakdown.filter((item) => item.answerStatus === 'unanswered').length;
+    const unrecognized = breakdown.filter((item) => item.answerStatus === 'unrecognized').length;
+    const answerSummary = {
+      total: questionOrder.length,
+      answered,
+      unanswered,
+      unrecognized,
+      orphaned: savedAnswerKeys.filter((qId) => !questionIdSet.has(qId)).length,
+    };
+
+    return NextResponse.json({ result, breakdown, answerSummary });
   } catch (err: any) {
     console.error('[/api/admin/results/[id]/breakdown] error:', err);
     return NextResponse.json(

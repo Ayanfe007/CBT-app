@@ -5,7 +5,7 @@ import { saveAnswers } from '@/lib/db/sessions';
 
 const answerEntry = z.object({
   sessionId: z.string().uuid(),
-  answers: z.record(z.string(), z.object({ letter: z.string().min(1), seq: z.number().int().nonnegative() })),
+  answers: z.record(z.string(), z.object({ letter: z.enum(['A', 'B', 'C', 'D']), seq: z.number().int().nonnegative() })),
   clientSeq: z.number().int().nonnegative().default(0),
 });
 

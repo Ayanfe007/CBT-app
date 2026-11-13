@@ -29,6 +29,7 @@ coverage
 # Tests
 coverage
 *.test.ts
+!src/**/*.test.ts
 
 # TypeScript
 *.tsbuildinfo

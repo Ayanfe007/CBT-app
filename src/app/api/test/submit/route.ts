@@ -7,7 +7,7 @@ import { saveAnswers, markSubmitted } from '@/lib/db/sessions';
 
 const answerEntry = z.object({
   sessionId: z.string().uuid(),
-  answers: z.record(z.string(), z.string()), // question_id -> letter
+  answers: z.record(z.string(), z.enum(['A', 'B', 'C', 'D'])), // question_id -> letter
   clientSeq: z.number().int().nonnegative().default(0),
 });
 
@@ -77,7 +77,7 @@ export async function POST(req: Request) {
     }
 
     // Save incoming answers (merge with existing).
-    const answersWithSeq: Record<string, { letter: string; seq: number }> = {};
+    const answersWithSeq: Record<string, { letter: 'A' | 'B' | 'C' | 'D'; seq: number }> = {};
     let seq = 0;
     for (const [qId, letter] of Object.entries(parsed.data.answers)) {
       seq += 1;
